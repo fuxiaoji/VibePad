@@ -1,0 +1,66 @@
+# Controller 手柄映射配置文件
+# 支持多个配置层，通过手柄按钮切换
+
+# 全局设置
+global:
+  mouse_sensitivity: 1.0        # 鼠标灵敏度倍率
+  scroll_sensitivity: 1.0       # 滚轮灵敏度倍率
+  deadzone: 0.15                # 摇杆死区 (0.0-1.0)，低于此值的输入被忽略
+  cursor_speed_curve: linear    # 光标速度曲线: linear / quadratic
+  mode_switch_hold_ms: 500      # 模式切换长按时间(毫秒)
+
+# 模式定义
+modes:
+  # --- 鼠标模式 (默认) ---
+  mouse:
+    switch_button: SELECT        # 切换到本模式的按钮（长按）
+    mappings:
+      # 摇杆
+      LEFT_STICK_X: mouse_x
+      LEFT_STICK_Y: mouse_y
+      RIGHT_STICK_X: scroll_x
+      RIGHT_STICK_Y: scroll_y
+      # 按钮
+      A: mouse_left
+      B: mouse_right
+      X: mouse_middle
+      Y: null
+      # 十字键
+      DPAD_UP: scroll_up
+      DPAD_DOWN: scroll_down
+      DPAD_LEFT: scroll_left
+      DPAD_RIGHT: scroll_right
+      # 肩键
+      LB: null
+      RB: null
+      # 扳机（可当修饰键）
+      LT: null
+      RT: null
+      # 功能键
+      START: null
+      SELECT: switch_mode.vibe   # 短按切到vibe coding模式
+
+  # --- Vibe Coding 模式 ---
+  vibe:
+    switch_button: SELECT
+    mappings:
+      # 摇杆在coding模式下仍可移动光标
+      LEFT_STICK_X: mouse_x
+      LEFT_STICK_Y: mouse_y
+      RIGHT_STICK_X: scroll_x
+      RIGHT_STICK_Y: scroll_y
+      # 快捷键映射
+      A: key.tab                # Accept
+      B: key.escape             # 取消/关闭
+      X: key.cmd+enter          # 提交/确认
+      Y: key.cmd+shift+enter    # 强制提交
+      DPAD_UP: key.cmd+k        # 语音输入 / Whisker
+      DPAD_DOWN: key.cmd+l      # 代码补全
+      DPAD_LEFT: key.cmd+z      # 撤销
+      DPAD_RIGHT: key.cmd+shift+z  # 重做
+      LB: key.cmd+c             # 复制
+      RB: key.cmd+v             # 粘贴
+      LT: key.shift
+      RT: key.cmd
+      START: null
+      SELECT: switch_mode.mouse  # 切回鼠标模式
