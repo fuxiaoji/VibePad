@@ -5,7 +5,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import yaml
 
@@ -43,7 +43,7 @@ class AppConfig:
         return self.mode_names[0] if self.mode_names else None
 
 
-def load_config(path: str | Path = "config.yaml") -> AppConfig:
+def load_config(path: Union[str, Path] = "config.yaml") -> AppConfig:
     """从YAML文件加载配置。"""
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)

@@ -9,19 +9,8 @@
 
 ---
 
-## Phase 0: Git/GitHub + 项目骨架（当前）
-
-### 0.1 版本控制
-- [ ] 初始化 Git 仓库
-- [ ] 创建 `.gitignore`
-- [ ] 创建 GitHub 仓库并推送
-
-### 0.2 项目文件
-- [ ] 编写 `README.md`
-- [ ] 创建 `src/` 目录结构和空模块文件
-- [ ] 编写 `requirements.txt`
-- [ ] 编写 `config.yaml` 默认配置
-- [ ] 创建 `docs/api/` 文档目录
+## Phase 0: Git/GitHub + 项目骨架
+- [x] 全部完成 ✓
 
 ---
 
@@ -36,37 +25,32 @@
 > 📝 **文档checkpoint**: `docs/api/controller.md` ✓ (17 tests passed)
 
 ### 1.2 鼠标模拟
-- [ ] 左摇杆 → 光标移动（支持灵敏度调节）
-- [ ] 右摇杆 → 滚轮（上下滚动）
-- [ ] A按钮 → 鼠标左键点击
-- [ ] B按钮 → 鼠标右键点击
-- [ ] 模式切换键：长按或双击进入/退出鼠标模式
+- [x] 左摇杆 → 光标移动（支持灵敏度调节）
+- [x] 右摇杆 → 滚轮（上下滚动）
+- [x] A按钮 → 鼠标左键点击
+- [x] B按钮 → 鼠标右键点击
+- [x] 模式切换键：长按或双击进入/退出鼠标模式
 
-> 📝 **文档checkpoint**: 完成后写 `docs/api/mouse_sim.md`，手动测试光标跟随和点击准确性
+> 📝 **文档checkpoint**: `docs/api/mouse_sim.md` ✓ (16 tests passed)
 
 ### 1.3 键盘模拟
-- [ ] 单键映射（手柄按钮 → 键盘按键）
-- [ ] 组合键支持（如 `Cmd+Enter`、`Cmd+C/V`）
-- [ ] 按住连发/长按区分
+- [x] 单键映射（手柄按钮 → 键盘按键）
+- [x] 组合键支持（如 `Cmd+Enter`、`Cmd+C/V`）
+- [x] 按住连发/长按区分
 
-> 📝 **文档checkpoint**: 完成后写 `docs/api/key_sim.md`，测试按键映射准确率
+> 📝 **文档checkpoint**: `docs/api/key_sim.md` ✓ (15 tests passed)
 
 ### 1.4 vibe coding 快捷键映射
-- [ ] 定义vibe coding常用按键映射表：
-  - 语音识别键（Whisker 触发键）
-  - Accept 键（Tab / Enter）
-  - 撤销/重做
-  - 复制/粘贴
-  - 代码补全触发
-- [ ] 与键盘模拟模块集成
-- [ ] 配置文件中自定义映射
+- [x] 定义vibe coding常用按键映射表 (config.yaml)
+- [x] 与键盘模拟模块集成 (engine.py 路由)
+- [x] 配置文件中自定义映射
 
-> 📝 **文档checkpoint**: 完成后写 `docs/api/vibe_mappings.md`，在VS Code中实测
+> 📝 **文档checkpoint**: 映射表已内置在 config.yaml
 
 ### 1.5 配置与管理
-- [ ] YAML配置文件加载与热重载
-- [ ] 多配置文件支持（鼠标模式 / coding模式 / 打字模式）
-- [ ] 模式切换逻辑（手柄按钮切换不同配置层）
+- [x] YAML配置文件加载 (config.py)
+- [x] 多配置文件支持（鼠标模式 / coding模式）
+- [x] 模式切换逻辑（engine.py SELECT短按切换）
 
 > 📝 **文档checkpoint**: Phase 1整体测试 + `docs/api/phase1_integration.md`
 

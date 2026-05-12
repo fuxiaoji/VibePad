@@ -1,11 +1,12 @@
-"""CLI入口 — 手柄操控电脑（开发期）。
+"""CLI入口 — 手柄操控电脑。
 
-启动后监听手柄输入，在终端打印实时状态。
+启动后监听手柄输入，根据配置文件驱动鼠标和键盘。
 按 Ctrl+C 退出。
 
 用法:
     python src/main.py
     python src/main.py --config my_config.yaml
+    python src/main.py --list
 """
 
 import argparse
@@ -14,7 +15,8 @@ import sys
 import time
 
 from src.config import load_config
-from src.controller import GamepadListener, find_controllers, Button
+from src.controller import GamepadListener, find_controllers
+from src.engine import ModeEngine
 
 
 def main():
@@ -34,41 +36,35 @@ def main():
         return
 
     config = load_config(args.config)
-    deadzone = config.global_.deadzone
-    print(f"配置文件: {args.config}")
-    print(f"死区: {deadzone}")
-    print(f"可用模式: {', '.join(config.mode_names)}")
+    print(f"配置: {args.config}")
+    print(f"死区: {config.global_.deadzone}")
+    print(f"模式: {', '.join(config.mode_names)}")
 
-    listener = GamepadListener(deadzone=deadzone)
+    listener = GamepadListener(deadzone=config.global_.deadzone)
+    engine = ModeEngine(config, listener)
 
-    # 注册按钮回调
-    def on_button(btn: Button, pressed: bool):
-        state_str = "按下" if pressed else "释放"
-        print(f"  [{state_str}] {btn.name}")
-
-    listener.on_button(on_button)
-
-    # 注册连接回调
     def on_connect():
-        print("手柄已连接")
+        print(f"\r手柄已连接 | 当前模式: {engine.current_mode}")
 
     def on_disconnect():
-        print("手柄已断开")
+        print("\r手柄已断开 — 等待重新连接...")
 
     listener.on_connect(on_connect)
     listener.on_disconnect(on_disconnect)
 
-    # 启动
+    engine.start()
     print("正在等待手柄连接...")
+
     if not listener.start():
         print("未找到手柄，请连接后重试")
         return
 
-    print("监听中... 按 Ctrl+C 退出")
+    # 状态显示间隔
+    last_status = 0.0
 
-    # 主循环：打印摇杆状态
     def cleanup(sig, frame):
         print("\n正在退出...")
+        engine.stop()
         listener.stop()
         sys.exit(0)
 
@@ -76,29 +72,26 @@ def main():
 
     try:
         while True:
-            state = listener.state
-            ls = state.left_stick
-            rs = state.right_stick
-            lt = state.left_trigger
-            rt = state.right_trigger
+            engine.tick()
 
-            # 只打印非零摇杆
-            parts = []
-            if abs(ls.x) > 0.01 or abs(ls.y) > 0.01:
-                parts.append(f"左摇杆({ls.x:+.2f}, {ls.y:+.2f})")
-            if abs(rs.x) > 0.01 or abs(rs.y) > 0.01:
-                parts.append(f"右摇杆({rs.x:+.2f}, {rs.y:+.2f})")
-            if lt.value > 0.01:
-                parts.append(f"LT:{lt.value:.2f}")
-            if rt.value > 0.01:
-                parts.append(f"RT:{rt.value:.2f}")
-            if parts:
-                print("\r" + " | ".join(parts), end="", flush=True)
+            # 每2秒显示一次状态
+            now = time.monotonic()
+            if now - last_status > 2.0:
+                state = listener.state
+                ls = state.left_stick
+                print(f"\r[模式: {engine.current_mode}] "
+                      f"摇杆({ls.x:+.2f}, {ls.y:+.2f})  "
+                      f"LT:{state.left_trigger.value:.2f} "
+                      f"RT:{state.right_trigger.value:.2f}  Ctrl+C退出",
+                      end="", flush=True)
+                last_status = now
 
-            time.sleep(0.05)
+            time.sleep(0.01)  # ~100Hz tick rate
+
     except KeyboardInterrupt:
         pass
     finally:
+        engine.stop()
         listener.stop()
         print("\n已退出")
 
