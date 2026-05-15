@@ -15,6 +15,7 @@ from src.config import AppConfig, ModeConfig
 from src.controller import GamepadListener, GamepadState, Button
 from src.mouse_sim import MouseSimulator, curve_from_string
 from src.key_sim import KeySimulator
+from src.navigator import Navigator
 
 
 class ActionType(Enum):
@@ -22,6 +23,7 @@ class ActionType(Enum):
     MOUSE = auto()      # 鼠标相关（移动、点击、滚轮）
     KEY = auto()        # 键盘相关（单键、组合键）
     SWITCH = auto()     # 模式切换
+    NAVIGATE = auto()   # UI 焦点导航（vim 模式）
     NONE = auto()       # 无映射
 
 
@@ -41,6 +43,8 @@ def classify_action(mapping_value: str) -> tuple[ActionType, str]:
         return (ActionType.MOUSE, mapping_value[6:])  # 去掉 "mouse_"
     if mapping_value.startswith("scroll_"):
         return (ActionType.MOUSE, mapping_value)
+    if mapping_value.startswith("nav."):
+        return (ActionType.NAVIGATE, mapping_value[4:])
     return (ActionType.NONE, "")
 
 
@@ -67,6 +71,7 @@ class ModeEngine:
             curve=curve_from_string(config.global_.cursor_speed_curve),
         )
         self.keys = KeySimulator()
+        self.navigator = Navigator()
 
         # 当前模式
         self._current_mode: str = config.default_mode or ""
@@ -92,6 +97,8 @@ class ModeEngine:
     def stop(self):
         """停止引擎，释放所有按键。"""
         self.keys.release_all()
+        if self.navigator.active:
+            self.navigator.stop()
 
     def tick(self):
         """每帧调用一次。处理摇杆→鼠标移动、滚轮持续输入。"""
@@ -156,6 +163,8 @@ class ModeEngine:
         elif action_type == ActionType.SWITCH:
             self._switch_hold_start[btn] = now
             self._switch_was_pressed.add(btn)
+        elif action_type == ActionType.NAVIGATE:
+            self._nav_action(param)
 
     def _handle_release(self, btn: Button, action_type: ActionType, param: str, now: float):
         if action_type == ActionType.MOUSE:
@@ -172,11 +181,59 @@ class ModeEngine:
 
     def _switch_mode(self, target_mode: str):
         """切换到目标模式。"""
-        if target_mode in self.config.modes:
-            old = self._current_mode
-            self._current_mode = target_mode
-            self.keys.release_all()
-            print(f"模式切换: {old} → {target_mode}")
+        if target_mode not in self.config.modes:
+            return
+
+        old = self._current_mode
+        old_cfg = self.config.get_mode(old)
+        new_cfg = self.config.get_mode(target_mode)
+
+        # 离开旧模式
+        if old_cfg and self._mode_has_nav(old_cfg):
+            self.navigator.stop()
+
+        self._current_mode = target_mode
+
+        # 进入新模式
+        if new_cfg and self._mode_has_nav(new_cfg):
+            self.navigator.start()
+
+        self.keys.release_all()
+        print(f"模式切换: {old} → {target_mode}")
+
+    def _nav_action(self, action: str):
+        """分发导航动作到 Navigator。"""
+        nav = self.navigator
+        if not nav.active:
+            return
+
+        dispatch = {
+            "up": nav.move_up,
+            "down": nav.move_down,
+            "left": nav.move_left,
+            "right": nav.move_right,
+            "click": nav.click,
+            "right_click": nav.right_click,
+            "double_click": nav.double_click,
+            "escape": nav.escape,
+            "tab": nav.tab,
+            "enter": nav.enter,
+            "scroll_up": nav.scroll_up,
+            "scroll_down": nav.scroll_down,
+            "prev_tab": nav.prev_tab,
+            "next_tab": nav.next_tab,
+            "refresh": nav.refresh,
+        }
+        fn = dispatch.get(action)
+        if fn:
+            fn()
+
+    @staticmethod
+    def _mode_has_nav(mode: ModeConfig | None) -> bool:
+        """检查模式中是否有导航动作映射。"""
+        if mode is None:
+            return False
+        return any(v.startswith("nav.") for v in mode.mappings.values())
 
     def _mouse_action(self, action: str, pressed: bool):
         """执行鼠标动作。"""

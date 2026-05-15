@@ -81,6 +81,7 @@ DPAD_ACTIVE = QColor(255, 200, 60)
 MODE_COLORS = {
     "mouse": QColor(80, 160, 255),
     "vibe": QColor(200, 120, 255),
+    "vim": QColor(80, 255, 160),
 }
 
 # ─── 可映射的手柄输入列表 ───
@@ -123,6 +124,26 @@ MOUSE_ACTIONS = {
     "scroll_right": "滚轮右滚",
     "scroll_x": "水平滚轮 (模拟)",
     "scroll_y": "垂直滚轮 (模拟)",
+}
+
+# ─── 导航动作列表 ───
+
+NAV_ACTIONS = {
+    "up": "向上移动焦点",
+    "down": "向下移动焦点",
+    "left": "向左移动焦点",
+    "right": "向右移动焦点",
+    "click": "左键点击焦点元素",
+    "right_click": "右键点击焦点元素",
+    "double_click": "双击焦点元素",
+    "escape": "按 Escape 关闭弹窗",
+    "tab": "按 Tab 焦点回退",
+    "enter": "按 Enter 确认",
+    "scroll_up": "向上滚动",
+    "scroll_down": "向下滚动",
+    "prev_tab": "上一个标签页",
+    "next_tab": "下一个标签页",
+    "refresh": "重新扫描UI元素",
 }
 
 
@@ -329,7 +350,7 @@ class BindingEditorDialog(QDialog):
         type_layout.addWidget(type_lbl)
 
         self._type_combo = QComboBox()
-        self._type_combo.addItems(["null", "mouse", "key", "switch_mode"])
+        self._type_combo.addItems(["null", "mouse", "key", "switch_mode", "nav"])
         self._type_combo.setStyleSheet(self._combo_style())
         type_layout.addWidget(self._type_combo, 1)
         layout.addLayout(type_layout)
@@ -393,6 +414,19 @@ class BindingEditorDialog(QDialog):
         switch_layout.addWidget(self._switch_combo, 1)
         layout.addWidget(self._switch_group)
 
+        # --- 导航子选项 ---
+        self._nav_group = QWidget()
+        nav_layout = QHBoxLayout(self._nav_group)
+        nav_layout.setContentsMargins(0, 0, 0, 0)
+        nav_lbl = QLabel("导航动作:")
+        nav_lbl.setStyleSheet(f"color: {TEXT_PRIMARY.name()};")
+        nav_layout.addWidget(nav_lbl)
+        self._nav_combo = QComboBox()
+        self._nav_combo.addItems(list(NAV_ACTIONS.keys()))
+        self._nav_combo.setStyleSheet(self._combo_style())
+        nav_layout.addWidget(self._nav_combo, 1)
+        layout.addWidget(self._nav_group)
+
         # --- 预览 ---
         preview_layout = QHBoxLayout()
         preview_lbl = QLabel("预览:")
@@ -419,6 +453,11 @@ class BindingEditorDialog(QDialog):
             idx = self._switch_combo.findText(param)
             if idx >= 0:
                 self._switch_combo.setCurrentIndex(idx)
+        elif action_type == ActionType.NAVIGATE:
+            self._type_combo.setCurrentText("nav")
+            idx = self._nav_combo.findText(param)
+            if idx >= 0:
+                self._nav_combo.setCurrentIndex(idx)
         else:
             self._type_combo.setCurrentText("null")
 
@@ -433,6 +472,7 @@ class BindingEditorDialog(QDialog):
         self._shift_cb.toggled.connect(self._on_sub_changed)
         self._alt_cb.toggled.connect(self._on_sub_changed)
         self._switch_combo.currentTextChanged.connect(self._on_sub_changed)
+        self._nav_combo.currentTextChanged.connect(self._on_sub_changed)
 
         # --- 按钮 ---
         buttons = QDialogButtonBox(
@@ -469,6 +509,7 @@ class BindingEditorDialog(QDialog):
         self._mouse_group.setVisible(t == "mouse")
         self._key_group.setVisible(t == "key")
         self._switch_group.setVisible(t == "switch_mode")
+        self._nav_group.setVisible(t == "nav")
 
     def _on_type_changed(self, _text: str):
         self._update_visibility()
@@ -500,6 +541,8 @@ class BindingEditorDialog(QDialog):
             return f"key.{'+'.join(parts)}" if parts else "key."
         elif t == "switch_mode":
             return f"switch_mode.{self._switch_combo.currentText()}"
+        elif t == "nav":
+            return f"nav.{self._nav_combo.currentText()}"
         return "null"
 
     def _on_accept(self):
@@ -850,7 +893,8 @@ class BindingsTab(QWidget):
             at, _ = classify_action(action)
             type_names = {
                 ActionType.MOUSE: "鼠标", ActionType.KEY: "键盘",
-                ActionType.SWITCH: "切换", ActionType.NONE: "无",
+                ActionType.SWITCH: "切换", ActionType.NAVIGATE: "导航",
+                ActionType.NONE: "无",
             }
             type_item = QTableWidgetItem(type_names.get(at, "?"))
             type_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)

@@ -3,3 +3,4 @@ pygame>=2.6.0
 pynput>=1.7.6
 PyQt6>=6.6
 PyYAML>=6.0
+uiautomation>=2.0

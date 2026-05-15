@@ -92,3 +92,40 @@ modes:
       SELECT: switch_mode.mouse  # 🔄 一键切回媒体模式
       LEFT_STICK: key.ctrl+p     # 快速打开文件 (Ctrl+P)
       RIGHT_STICK: key.ctrl+shift+p  # 命令面板 (Ctrl+Shift+P)
+
+  # ============================================================
+  # Vim 模式 —— UI 焦点导航 (类似 Switch/Apple TV)
+  # 十字键在可交互UI元素间跳转，A键点击，蓝色边框高亮
+  # ============================================================
+  vim:
+    switch_button: SELECT        # 短按 SELECT 切到鼠标模式
+    mappings:
+      # --- 十字键 (核心导航) ---
+      DPAD_UP: nav.up            # 焦点移到上方元素
+      DPAD_DOWN: nav.down        # 焦点移到下方元素
+      DPAD_LEFT: nav.left        # 焦点移到左侧元素
+      DPAD_RIGHT: nav.right      # 焦点移到右侧元素
+
+      # --- 面部按钮 (元素操作) ---
+      A: nav.click               # 点击/激活焦点元素
+      B: nav.escape              # Escape — 关闭弹窗/退出
+      X: nav.tab                 # Tab — 原生焦点回退
+      Y: nav.right_click         # 右键点击焦点元素
+
+      # --- 肩键 (标签页) ---
+      LB: nav.prev_tab           # 上一个标签页 (Ctrl+Shift+Tab)
+      RB: nav.next_tab           # 下一个标签页 (Ctrl+Tab)
+
+      # --- 扳机 (滚动) ---
+      LT: nav.scroll_up          # 向上滚动焦点区域
+      RT: nav.scroll_down        # 向下滚动焦点区域
+
+      # --- 功能键 ---
+      START: nav.enter           # Enter — 确认
+      SELECT: switch_mode.mouse  # 🔄 一键切回鼠标模式
+      LEFT_STICK: nav.refresh    # 重新扫描UI元素 (弹窗后刷新)
+      RIGHT_STICK: null
+      LEFT_STICK_X: null         # vim模式不使用摇杆
+      LEFT_STICK_Y: null
+      RIGHT_STICK_X: null
+      RIGHT_STICK_Y: null
