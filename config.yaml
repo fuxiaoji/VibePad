@@ -1,66 +1,94 @@
 # Controller 手柄映射配置文件
 # 支持多个配置层，通过手柄按钮切换
+#
+# 设计理念：左手B站 + 右手VSCode 双屏工作流
+#   SELECT 短按 → 一键切换「媒体浏览」/「Vibecoding」模式
+#   无需放下手柄即可在刷视频和写代码之间无缝切换
 
 # 全局设置
 global:
   mouse_sensitivity: 1.0        # 鼠标灵敏度倍率
   scroll_sensitivity: 1.0       # 滚轮灵敏度倍率
   deadzone: 0.15                # 摇杆死区 (0.0-1.0)，低于此值的输入被忽略
-  cursor_speed_curve: linear    # 光标速度曲线: linear / quadratic
+  cursor_speed_curve: linear    # 光标速度曲线: linear / quadratic / cubic
   mode_switch_hold_ms: 500      # 模式切换长按时间(毫秒)
 
 # 模式定义
 modes:
-  # --- 鼠标模式 (默认) ---
+  # ============================================================
+  # 鼠标模式 —— 媒体浏览 (B站 / YouTube / 网页)
+  # 人体工程学：右手拇指操纵杆/按钮，左手拇指十字键，食指肩键
+  # ============================================================
   mouse:
-    switch_button: SELECT        # 切换到本模式的按钮（长按）
+    switch_button: SELECT        # 短按 SELECT 切到编码模式
     mappings:
-      # 摇杆
-      LEFT_STICK_X: mouse_x
+      # --- 摇杆 (拇指自然位，连续操作) ---
+      LEFT_STICK_X: mouse_x      # 左摇杆 → 光标移动
       LEFT_STICK_Y: mouse_y
-      RIGHT_STICK_X: scroll_x
+      RIGHT_STICK_X: scroll_x    # 右摇杆 → 页面滚动
       RIGHT_STICK_Y: scroll_y
-      # 按钮
-      A: mouse_left
-      B: mouse_right
-      X: mouse_middle
-      Y: null
-      # 十字键
-      DPAD_UP: scroll_up
-      DPAD_DOWN: scroll_down
-      DPAD_LEFT: scroll_left
-      DPAD_RIGHT: scroll_right
-      # 肩键
-      LB: null
-      RB: null
-      # 扳机（可当修饰键）
-      LT: null
-      RT: null
-      # 功能键
-      START: null
-      SELECT: switch_mode.vibe   # 短按切到vibe coding模式
 
-  # --- Vibe Coding 模式 ---
+      # --- 面部按钮 (右手拇指，高频操作) ---
+      A: mouse_left              # 左键点击 (选视频、点按钮)
+      B: mouse_right             # 右键菜单
+      X: key.space               # 暂停/播放 (B站/YouTube 通用)
+      Y: key.f                   # 全屏切换 (fullscreen toggle)
+
+      # --- 十字键 (左手拇指，导航) ---
+      DPAD_UP: key.up            # B站: 音量+ | 列表: 上移
+      DPAD_DOWN: key.down        # B站: 音量- | 列表: 下移
+      DPAD_LEFT: key.left        # B站: 后退5秒 | 浏览: 前进/后退
+      DPAD_RIGHT: key.right      # B站: 前进5秒
+
+      # --- 肩键 (食指自然位，高频修饰操作) ---
+      LB: key.ctrl+shift+tab     # 浏览器: 上一个标签页
+      RB: key.ctrl+tab           # 浏览器: 下一个标签页
+
+      # --- 扳机 (中指自然位，系统级操作) ---
+      LT: key.media_volume_down  # 系统音量-
+      RT: key.media_volume_up    # 系统音量+
+
+      # --- 功能键 ---
+      START: key.m               # 静音切换 (mute toggle)
+      SELECT: switch_mode.vibe   # 🔄 一键切到编码模式
+      LEFT_STICK: null           # (避免误触)
+      RIGHT_STICK: null
+
+  # ============================================================
+  # Vibe Coding 模式 —— VSCode + Copilot + Claude Code
+  # 人体工程学：最高频操作在A/B/X/Y，导航在十字键
+  # ============================================================
   vibe:
-    switch_button: SELECT
+    switch_button: SELECT        # 短按 SELECT 切回浏览模式
     mappings:
-      # 摇杆在coding模式下仍可移动光标
-      LEFT_STICK_X: mouse_x
+      # --- 摇杆 (保持光标和滚动能力) ---
+      LEFT_STICK_X: mouse_x      # 左摇杆 → 光标移动 (定位代码)
       LEFT_STICK_Y: mouse_y
-      RIGHT_STICK_X: scroll_x
+      RIGHT_STICK_X: scroll_x    # 右摇杆 → 页面滚动 (浏览代码)
       RIGHT_STICK_Y: scroll_y
-      # 快捷键映射
-      A: key.tab                # Accept
-      B: key.escape             # 取消/关闭
-      X: key.ctrl+enter         # 提交/确认
-      Y: key.ctrl+shift+enter   # 强制提交
-      DPAD_UP: key.ctrl+k       # 语音输入 / Whisker
-      DPAD_DOWN: key.ctrl+l     # 代码补全
-      DPAD_LEFT: key.ctrl+z     # 撤销
-      DPAD_RIGHT: key.ctrl+shift+z  # 重做
-      LB: key.ctrl+c            # 复制
-      RB: key.ctrl+v            # 粘贴
-      LT: key.shift
-      RT: key.ctrl
-      START: null
-      SELECT: switch_mode.mouse  # 切回鼠标模式
+
+      # --- 面部按钮 (右手拇指，AI交互核心) ---
+      A: key.tab                 # ① 接受AI建议 (Copilot/Claude Code)
+      B: key.escape              # ② 拒绝建议 / 关闭面板
+      X: key.ctrl+enter          # ③ 提交给AI / 应用差异 (Claude Code)
+      Y: key.ctrl+shift+enter    # ④ 强制提交
+
+      # --- 十字键 (左手拇指，代码导航) ---
+      DPAD_UP: key.up            # 光标上移
+      DPAD_DOWN: key.down        # 光标下移
+      DPAD_LEFT: key.alt+[       # Copilot: 上一条建议
+      DPAD_RIGHT: key.alt+]      # Copilot: 下一条建议
+
+      # --- 肩键 (食指，剪贴板) ---
+      LB: key.ctrl+c             # 复制
+      RB: key.ctrl+v             # 粘贴
+
+      # --- 扳机 (中指，编辑操作) ---
+      LT: key.ctrl+z             # 撤销 (Undo)
+      RT: key.ctrl+shift+z       # 重做 (Redo)
+
+      # --- 功能键 ---
+      START: key.ctrl+s          # 保存文件
+      SELECT: switch_mode.mouse  # 🔄 一键切回媒体模式
+      LEFT_STICK: key.ctrl+p     # 快速打开文件 (Ctrl+P)
+      RIGHT_STICK: key.ctrl+shift+p  # 命令面板 (Ctrl+Shift+P)

@@ -40,8 +40,12 @@ _SPECIAL_KEYS = {
     "end": Key.end,
     "page_up": Key.page_up,
     "page_down": Key.page_down,
-
-
+    "media_volume_up": Key.media_volume_up,
+    "media_volume_down": Key.media_volume_down,
+    "media_volume_mute": Key.media_volume_mute,
+    "media_play_pause": Key.media_play_pause,
+    "media_next": Key.media_next,
+    "media_previous": Key.media_previous,
 }
 
 # F键

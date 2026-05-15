@@ -71,3 +71,25 @@ def load_config(path: Union[str, Path] = "config.yaml") -> AppConfig:
         )
 
     return AppConfig(global_=global_cfg, modes=modes)
+
+
+def save_config(config: AppConfig, path: Union[str, Path] = "config.yaml"):
+    """将 AppConfig 写回 YAML 文件。"""
+    data = {
+        "global": {
+            "mouse_sensitivity": config.global_.mouse_sensitivity,
+            "scroll_sensitivity": config.global_.scroll_sensitivity,
+            "deadzone": config.global_.deadzone,
+            "cursor_speed_curve": config.global_.cursor_speed_curve,
+            "mode_switch_hold_ms": config.global_.mode_switch_hold_ms,
+        },
+        "modes": {
+            name: {
+                "switch_button": mc.switch_button,
+                "mappings": dict(mc.mappings),
+            }
+            for name, mc in config.modes.items()
+        },
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)

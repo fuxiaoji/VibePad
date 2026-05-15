@@ -39,6 +39,8 @@ def classify_action(mapping_value: str) -> tuple[ActionType, str]:
         return (ActionType.KEY, mapping_value)
     if mapping_value.startswith("mouse_"):
         return (ActionType.MOUSE, mapping_value[6:])  # 去掉 "mouse_"
+    if mapping_value.startswith("scroll_"):
+        return (ActionType.MOUSE, mapping_value)
     return (ActionType.NONE, "")
 
 
