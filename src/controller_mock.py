@@ -19,6 +19,8 @@
     方向键     → 十字键
 """
 
+from __future__ import annotations
+
 import threading
 import time
 from typing import Optional

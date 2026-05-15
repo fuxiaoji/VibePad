@@ -7,6 +7,8 @@
 需要 PyQt6 + 已连接的手柄。
 """
 
+from __future__ import annotations
+
 import math
 import sys
 import time
@@ -450,25 +452,26 @@ class DebugWindow(QMainWindow):
             self._fps_timer = now
             self._fps_label.setText(f"FPS: {self._fps}")
 
-        # 连接状态
+        # 连接状态 — 每2秒检查一次，避免频繁干扰后端
         if self._mock:
             self._connected = True
             self._connection_label.setText("键盘模拟手柄 (Mock)")
             self._connection_label.setStyleSheet(f"color: {DPAD_ACTIVE.name()}; font-weight: bold;")
         else:
-            controllers = find_controllers()
-            was_connected = self._connected
-            self._connected = len(controllers) > 0
+            if now - getattr(self, '_last_check', 0) > 2.0:
+                self._last_check = now
+                controllers = find_controllers()
+                was_connected = self._connected
+                self._connected = len(controllers) > 0
 
-            if self._connected and not was_connected:
-                self._connection_label.setText(f"已连接: {controllers[0]}")
-                self._connection_label.setStyleSheet(f"color: {TRIGGER_FILL.name()}; font-weight: bold;")
-                self._log("手柄已连接")
-                self._engine.start()
-            elif not self._connected and was_connected:
-                self._connection_label.setText("已断开 — 等待重连...")
-                self._connection_label.setStyleSheet(f"color: {ACCENT_PRESSED.name()}; font-weight: bold;")
-                self._log("手柄已断开")
+                if self._connected and not was_connected:
+                    self._connection_label.setText(f"已连接: {controllers[0]}")
+                    self._connection_label.setStyleSheet(f"color: {TRIGGER_FILL.name()}; font-weight: bold;")
+                    self._log("手柄已连接")
+                elif not self._connected and was_connected:
+                    self._connection_label.setText("已断开 — 等待重连...")
+                    self._connection_label.setStyleSheet(f"color: {ACCENT_PRESSED.name()}; font-weight: bold;")
+                    self._log("手柄已断开")
 
             if not self._connected:
                 return
@@ -524,12 +527,20 @@ class DebugWindow(QMainWindow):
 # ─── 入口 ───
 
 def main():
+    import os as _os
     parser_args = sys.argv[1:]
     config_path = "config.yaml"
     if "--config" in parser_args:
         idx = parser_args.index("--config")
         if idx + 1 < len(parser_args):
             config_path = parser_args[idx + 1]
+
+    # 从脚本所在目录找 config.yaml（解决工作目录不一致问题）
+    if not _os.path.exists(config_path):
+        script_dir = _os.path.dirname(_os.path.abspath(__file__))
+        alt_path = _os.path.join(script_dir, "config.yaml")
+        if _os.path.exists(alt_path):
+            config_path = alt_path
 
     print(f"加载配置: {config_path}")
     config = load_config(config_path)

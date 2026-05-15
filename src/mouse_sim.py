@@ -4,6 +4,8 @@
 使用 pynput 底层控制，避免 pyautogui 的故障安全 corner 检测。
 """
 
+from __future__ import annotations
+
 import time
 from enum import Enum, auto
 
@@ -39,6 +41,8 @@ class MouseSimulator:
         self.curve = curve
         self.base_speed = base_speed
         self._controller = Controller()
+        self._scroll_accum_x = 0.0
+        self._scroll_accum_y = 0.0
 
     # --- 光标移动 ---
 
@@ -107,10 +111,16 @@ class MouseSimulator:
             dx: 水平滚动量（正=右）
             dy: 垂直滚动量（正=上）
         """
-        if dx:
-            self._controller.scroll(int(dx * self.scroll_sensitivity), 0)
-        if dy:
-            self._controller.scroll(0, int(dy * self.scroll_sensitivity))
+        self._scroll_accum_x += dx * self.scroll_sensitivity
+        self._scroll_accum_y += dy * self.scroll_sensitivity
+
+        ix = int(self._scroll_accum_x)
+        iy = int(self._scroll_accum_y)
+
+        if ix or iy:
+            self._controller.scroll(ix, iy)
+            self._scroll_accum_x -= ix
+            self._scroll_accum_y -= iy
 
     # --- 内部 ---
 

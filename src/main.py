@@ -9,6 +9,8 @@
     python src/main.py --list
 """
 
+from __future__ import annotations
+
 import argparse
 import signal
 import sys

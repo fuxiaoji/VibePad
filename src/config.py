@@ -3,6 +3,8 @@
 从 YAML 文件加载手柄映射配置，支持热重载。
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Union

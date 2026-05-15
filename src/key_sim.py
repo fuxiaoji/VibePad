@@ -15,6 +15,7 @@ F键: f1-f12
 字母/数字/符号: a-z, 0-9, ., ,, /, ;, ', [, ], -, =
 """
 
+import sys
 from enum import Enum, auto
 from typing import Optional
 
@@ -58,6 +59,11 @@ _MODIFIERS = {
     "option": Key.alt,
     "shift": Key.shift,
 }
+
+# 非 macOS 平台上将 cmd/command 映射到 ctrl
+if sys.platform != "darwin":
+    _MODIFIERS["cmd"] = Key.ctrl
+    _MODIFIERS["command"] = Key.ctrl
 
 
 def _parse_key(key_name: str):

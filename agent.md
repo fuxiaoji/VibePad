@@ -12,23 +12,22 @@
 https://github.com/fuxiaoji/controller
 
 ## 平台策略
-- 原始计划 macOS 优先，但开发中切换到 Windows
-- **Windows**: `inputs` 库和 `pygame`/SDL2 都应该能检测手柄（Windows 有 XInput + DirectInput 原生支持）
+- **Windows** (当前): pygame/SDL2 后端优先（XInput + DirectInput 原生支持），hidapi 备选
 - **macOS**: 仅官方手柄可用（Xbox Series/PS5/Switch Pro），第三方手柄(VID:0x413D 等)不被系统识别
-- **Linux**: `inputs` 库（evdev）成熟可用
+- **Linux**: hidapi + pygame 后端均可工作
 
 ## 技术栈
 | 层 | 选择 | 说明 |
 |----|------|------|
-| 语言 | Python 3.9+ | |
-| 手柄输入(物理) | `hidapi` Python包 | 跨平台HID底层读取，在macOS上可枚举但受权限限制；Windows上应直接从XInput读取 |
+| 语言 | Python 3.8+ | |
+| 手柄输入(物理) | pygame/SDL2 优先, hidapi 备选 | `src/controller.py` — 自动选择最佳后端 |
 | 手柄输入(模拟) | `pygame` 键盘事件 | `src/controller_mock.py` — 无手柄时用键盘测试 |
 | 鼠标模拟 | `pynput.mouse.Controller` | `src/mouse_sim.py` |
-| 键盘模拟 | `pynput.keyboard.Controller` | `src/key_sim.py` |
+| 键盘模拟 | `pynput.keyboard.Controller` | `src/key_sim.py` — 非macOS上cmd→ctrl自动映射 |
 | UI导航 | macOS: `pyobjc`; Windows: `uiautomation` / `pywinauto` | Phase 2 用到 |
 | GUI | `PyQt6` | Phase 4 最终交付 |
 | 配置 | YAML | `config.yaml` |
-| 测试 | pytest | `tests/` |
+| 测试 | pytest | 58 tests passed @ Windows |
 
 ## 架构
 
@@ -50,7 +49,7 @@ engine.py ───→ MouseSimulator    KeySimulator
 | 文件 | 职责 | 状态 |
 |------|------|------|
 | `src/types.py` | 共享数据类型 (Button, GamepadState, 回调类型) | 完成 |
-| `src/controller.py` | hidapi 物理手柄后端 | 完成(需Windows验证) |
+| `src/controller.py` | 多后端物理手柄 (pygame优先, hidapi备选) | 完成(Windows验证通过) |
 | `src/controller_mock.py` | 键盘模拟手柄 (WASD/IJKL/Space...) | 完成 |
 | `src/config.py` | YAML配置加载 | 完成 |
 | `src/engine.py` | 模式引擎，输入→输出路由 | 完成 |

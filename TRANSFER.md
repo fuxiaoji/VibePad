@@ -56,21 +56,26 @@ python diag_gamepad.py
 
 Windows 上预计 `pygame` 或 `inputs` 能直接检测到。如果 `controller.py` 当前使用的 hidapi 后端不work，参考 `controller_mock.py` 的 pygame 事件循环写法来改写。
 
-## 6. 项目状态（2026-05-12）
+## 6. 项目状态（2026-05-14）
 
 - **Phase 0**: ✅ Git/GitHub/项目骨架
-- **Phase 1**: ✅ 手柄捕获 + 鼠标模拟 + 键盘模拟 + 模式引擎 + 配置 + 调试面板
+- **Phase 1**: ✅ 手柄捕获 + 鼠标模拟 + 键盘模拟 + 模式引擎 + 配置 + 调试面板 + **Windows适配完成**
 - **Phase 2**: 未开始 — Vim风格UI焦点导航
 - **Phase 3**: 未开始 — 手柄打字法
 - **Phase 4**: 未开始 — PyQt6 GUI桌面应用
 
+### Windows 适配已完成
+- requirements.txt 已更新（移除 macOS-only `pyobjc`, `inputs`）
+- controller.py 多后端支持（pygame/SDL2 优先, hidapi 备选）
+- config.yaml 快捷键映射改为 `ctrl`（非 macOS 上 `cmd` 自动映射为 `ctrl`）
+- 58 tests passed on Windows
+- Python 3.8+ 兼容（添加 `from __future__ import annotations`）
+
 ## 7. 继续开发的入口
 
-1. 读懂 `agent.md` — 项目知识库
-2. 读懂 `plantodo.md` — 下一步任务
-3. 运行 `python test_gui.py` — 看调试面板效果
-4. 连接手柄验证 `controller.py`，如不work则换pygame后端
-5. 开始 Phase 2: `src/navigator.py`
+1. 运行 `python test_gui.py` — 看调试面板效果（无手柄时自动用键盘模拟）
+2. 连接手柄验证 — Windows上 pygame/SDL2 应直接识别 XInput/DirectInput
+3. 开始 Phase 2: `src/navigator.py` — 用 `uiautomation` 或 `pywinauto`
 
 ## 8. 关键文件
 

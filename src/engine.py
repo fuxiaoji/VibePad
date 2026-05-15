@@ -6,6 +6,8 @@
 支持模式切换（短按/长按切换按钮）。
 """
 
+from __future__ import annotations
+
 import time
 from enum import Enum, auto
 

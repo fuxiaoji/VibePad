@@ -8,7 +8,7 @@
 - **手柄打字** — 按钮组合映射键盘输入
 
 ## 平台
-macOS（优先） → Windows / Linux
+Windows（当前） → macOS / Linux 兼容
 
 ## 安装
 

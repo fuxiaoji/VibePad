@@ -55,8 +55,9 @@
 > 📝 **文档checkpoint**: Phase 1整体测试 + `docs/api/phase1_integration.md`
 
 ### 1.6 Phase 1 收尾
-- [ ] 整理 `docs/api/` 全部接口文档
-- [ ] 端到端测试：手柄→鼠标移动→快捷键输入
+- [x] 整理 `docs/api/` 全部接口文档
+- [x] 端到端测试：手柄→鼠标移动→快捷键输入
+- [x] Windows 平台适配完成 (pygame后端, cmd→ctrl映射, Python 3.8+兼容)
 - [ ] Git commit + push
 - [ ] **推荐 Phase 2 启动条件**
 

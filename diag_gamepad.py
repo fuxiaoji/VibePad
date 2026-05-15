@@ -1,4 +1,6 @@
 """手柄诊断 — hidapi 后端。"""
+from __future__ import annotations
+
 import hid
 import struct
 from src.controller import find_controllers, XboxReportParser
