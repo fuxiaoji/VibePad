@@ -233,7 +233,7 @@ class ModeEngine:
         """检查模式中是否有导航动作映射。"""
         if mode is None:
             return False
-        return any(v.startswith("nav.") for v in mode.mappings.values())
+        return any((v or "").startswith("nav.") for v in mode.mappings.values())
 
     def _mouse_action(self, action: str, pressed: bool):
         """执行鼠标动作。"""

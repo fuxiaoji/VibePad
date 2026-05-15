@@ -2,7 +2,7 @@
 # 支持多个配置层，通过手柄按钮切换
 #
 # 设计理念：左手B站 + 右手VSCode 双屏工作流
-#   SELECT 短按 → 一键切换「媒体浏览」/「Vibecoding」模式
+#   SELECT 短按 → 三模式循环: Mouse → Vibe → Vim → Mouse
 #   无需放下手柄即可在刷视频和写代码之间无缝切换
 
 # 全局设置
@@ -89,7 +89,7 @@ modes:
 
       # --- 功能键 ---
       START: key.ctrl+s          # 保存文件
-      SELECT: switch_mode.mouse  # 🔄 一键切回媒体模式
+      SELECT: switch_mode.vim    # 🔄 一键切到 Vim 导航模式
       LEFT_STICK: key.ctrl+p     # 快速打开文件 (Ctrl+P)
       RIGHT_STICK: key.ctrl+shift+p  # 命令面板 (Ctrl+Shift+P)
 
