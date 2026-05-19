@@ -610,16 +610,34 @@ class _GamepadListener:
             state.right_stick.x = self._apply_deadzone(parsed.get("rx", 0.0))
             state.right_stick.y = self._apply_deadzone(parsed.get("ry", 0.0))
 
-            # 扳机
+            # 扳机 — 带迟滞的按钮检测，防止临界值抖动
             lt_val = parsed.get("lt", 0.0)
             rt_val = parsed.get("rt", 0.0)
             state.left_trigger.value = lt_val
             state.right_trigger.value = rt_val
 
             lt_was = state.left_trigger.pressed
-            state.left_trigger.pressed = lt_val > state.left_trigger.threshold
+            # 按下阈值 0.5，松开阈值 0.3（迟滞防抖）
+            if lt_was:
+                state.left_trigger.pressed = lt_val > 0.3
+            else:
+                state.left_trigger.pressed = lt_val > 0.5
+
             rt_was = state.right_trigger.pressed
-            state.right_trigger.pressed = rt_val > state.right_trigger.threshold
+            if rt_was:
+                state.right_trigger.pressed = rt_val > 0.3
+            else:
+                state.right_trigger.pressed = rt_val > 0.5
+
+            # 扳机虚拟按钮边沿检测（LT/RT 作为按钮事件分发）
+            if state.left_trigger.pressed and not lt_was:
+                prev_buttons[Button.LT] = True
+            elif not state.left_trigger.pressed and lt_was:
+                prev_buttons[Button.LT] = False
+            if state.right_trigger.pressed and not rt_was:
+                prev_buttons[Button.RT] = True
+            elif not state.right_trigger.pressed and rt_was:
+                prev_buttons[Button.RT] = False
 
             # 按钮变更检测
             new_buttons = parsed.get("buttons", {})

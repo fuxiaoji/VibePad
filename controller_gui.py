@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QFrame,
     QPushButton,
+    QSlider,
     QComboBox,
     QTableWidget,
     QTableWidgetItem,
@@ -124,6 +125,7 @@ MOUSE_ACTIONS = {
     "scroll_right": "滚轮右滚",
     "scroll_x": "水平滚轮 (模拟)",
     "scroll_y": "垂直滚轮 (模拟)",
+    "speed_hold": "按住光标加速",
 }
 
 # ─── 导航动作列表 ───
@@ -144,6 +146,9 @@ NAV_ACTIONS = {
     "prev_tab": "上一个标签页",
     "next_tab": "下一个标签页",
     "refresh": "重新扫描UI元素",
+    "speed_hold": "按住倍速播放 (视频)",
+    "task_view": "Win+Tab 任务视图",
+    "switch_input": "切换输入语言 (Win+Space)",
 }
 
 
@@ -580,10 +585,13 @@ class DashboardTab(QWidget):
     """手柄实时状态可视化。"""
 
     def __init__(self, listener: GamepadListener, engine: ModeEngine,
+                 config: AppConfig, config_path: str,
                  mock: bool, log_fn, parent=None):
         super().__init__(parent)
         self._listener = listener
         self._engine = engine
+        self._config = config
+        self._config_path = config_path
         self._mock = mock
         self._log_fn = log_fn
         self._connected = False
@@ -719,6 +727,58 @@ class DashboardTab(QWidget):
 
         main_layout.addLayout(bottom)
 
+        # ── 鼠标设置 ──
+        mouse_group = QGroupBox("鼠标设置")
+        mouse_group.setFont(QFont("Sans", 10))
+        mouse_group.setStyleSheet(self._group_style())
+        mouse_layout = QVBoxLayout(mouse_group)
+
+        sens_layout = QHBoxLayout()
+        sens_label = QLabel("光标移速")
+        sens_label.setFont(QFont("Sans", 10))
+        sens_label.setStyleSheet(f"color: {TEXT_PRIMARY.name()};")
+        sens_layout.addWidget(sens_label)
+
+        self._sens_slider = QSlider(Qt.Orientation.Horizontal)
+        self._sens_slider.setRange(1, 50)  # 0.1 ~ 5.0
+        raw_sens = getattr(self._engine.mouse, 'sensitivity', 1.0)
+        self._sens_slider.setValue(int(raw_sens * 10))
+        self._sens_slider.valueChanged.connect(self._on_sensitivity_changed)
+        self._sens_slider.setStyleSheet(self._slider_style())
+        sens_layout.addWidget(self._sens_slider, 1)
+
+        self._sens_value_label = QLabel(f"{raw_sens:.1f}x")
+        self._sens_value_label.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
+        self._sens_value_label.setStyleSheet(f"color: {ACCENT.name()};")
+        self._sens_value_label.setFixedWidth(45)
+        self._sens_value_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        sens_layout.addWidget(self._sens_value_label)
+        mouse_layout.addLayout(sens_layout)
+
+        boost_layout = QHBoxLayout()
+        boost_label = QLabel("加速倍率")
+        boost_label.setFont(QFont("Sans", 10))
+        boost_label.setStyleSheet(f"color: {TEXT_PRIMARY.name()};")
+        boost_layout.addWidget(boost_label)
+
+        self._boost_slider = QSlider(Qt.Orientation.Horizontal)
+        self._boost_slider.setRange(10, 50)  # 1.0 ~ 5.0
+        raw_boost = getattr(self._engine.mouse, 'speed_boost', 2.0)
+        self._boost_slider.setValue(int(raw_boost * 10))
+        self._boost_slider.valueChanged.connect(self._on_boost_changed)
+        self._boost_slider.setStyleSheet(self._slider_style())
+        boost_layout.addWidget(self._boost_slider, 1)
+
+        self._boost_value_label = QLabel(f"{raw_boost:.1f}x")
+        self._boost_value_label.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
+        self._boost_value_label.setStyleSheet(f"color: {ACCENT.name()};")
+        self._boost_value_label.setFixedWidth(45)
+        self._boost_value_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        boost_layout.addWidget(self._boost_value_label)
+        mouse_layout.addLayout(boost_layout)
+
+        main_layout.addWidget(mouse_group)
+
         # 模式切换日志
         log_group = QGroupBox("模式切换日志")
         log_group.setFont(QFont("Sans", 9))
@@ -736,6 +796,29 @@ class DashboardTab(QWidget):
             "border-radius: 8px; padding: 14px 8px 8px 8px; margin-top: 10px; }"
             f"QGroupBox::title {{ subcontrol-origin: margin; left: 10px; }}"
         )
+
+    def _slider_style(self) -> str:
+        return (
+            f"QSlider::groove:horizontal {{ background: {BG_PANEL.name()}; height: 6px; "
+            "border-radius: 3px; }}"
+            f"QSlider::handle:horizontal {{ background: {ACCENT.name()}; width: 14px; "
+            "height: 14px; margin: -5px 0; border-radius: 7px; }}"
+            f"QSlider::sub-page:horizontal {{ background: {ACCENT.name()}; border-radius: 3px; }}"
+        )
+
+    def _on_sensitivity_changed(self, value: int):
+        sens = value / 10.0
+        self._engine.mouse.sensitivity = sens
+        self._config.global_.mouse_sensitivity = sens
+        self._sens_value_label.setText(f"{sens:.1f}x")
+        save_config(self._config, self._config_path)
+
+    def _on_boost_changed(self, value: int):
+        boost = value / 10.0
+        self._engine.mouse.speed_boost = boost
+        self._config.global_.mouse_speed_boost = boost
+        self._boost_value_label.setText(f"{boost:.1f}x")
+        save_config(self._config, self._config_path)
 
     def tick(self, now: float):
         self._frame_count += 1
@@ -1004,7 +1087,8 @@ class MainWindow(QMainWindow):
         """)
 
         self._dashboard = DashboardTab(
-            self._listener, self._engine, self._mock, self._log
+            self._listener, self._engine, self._config, self._config_path,
+            self._mock, self._log
         )
         self._bindings = BindingsTab(self._config, self._config_path)
 

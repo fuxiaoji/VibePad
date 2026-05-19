@@ -41,12 +41,18 @@ WM_PAINT = 0x000F
 WM_CLOSE = 0x0010
 WM_DESTROY = 0x0002
 WM_ERASEBKGND = 0x0014
+WM_TIMER = 0x0113
 WM_APP = 0x8000
 MSG_SHOW = WM_APP + 1
 MSG_HIDE = WM_APP + 2
 MSG_QUIT = WM_APP + 3
 
+TIMER_ANIM = 1
+ANIM_DURATION = 0.15  # 150ms 动画时长
+
 SW_HIDE = 0
+SW_SHOW = 5
+SW_RESTORE = 9
 SW_SHOWNOACTIVATE = 4
 SWP_NOZORDER = 0x0004
 SWP_NOMOVE = 0x0002
@@ -59,9 +65,15 @@ COLORKEY_G = 2
 COLORKEY_B = 3
 COLORKEY_COLORREF = COLORKEY_R | (COLORKEY_G << 8) | (COLORKEY_B << 16)
 
-BORDER_COLOR = 0x00C8A000  # BGR: A0=160, C8=200 → #00A0C8
-BORDER_WIDTH = 3
-BORDER_RADIUS = 8
+BORDER_COLOR = 0x00FFC800  # BGR: 主边框 亮青橙 (#00C8FF → BGR: 0x00FFC800)
+GLOW_MID_COLOR = 0x00B47828   # BGR: 中间辉光
+GLOW_OUTER_COLOR = 0x00503C14 # BGR: 外圈辉光（最暗最宽）
+BORDER_WIDTH_MAIN = 5
+BORDER_WIDTH_MID = 10
+BORDER_WIDTH_OUTER = 18
+BORDER_RADIUS_MAIN = 10
+BORDER_RADIUS_MID = 14
+BORDER_RADIUS_OUTER = 20
 
 # Win32 API 绑定
 _user32 = ctypes.windll.user32
@@ -79,6 +91,11 @@ _user32.PostMessageW.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.UINT,
 _user32.BeginPaint.argtypes = [ctypes.wintypes.HWND, ctypes.c_void_p]
 _user32.EndPaint.argtypes = [ctypes.wintypes.HWND, ctypes.c_void_p]
 _user32.InvalidateRect.argtypes = [ctypes.wintypes.HWND, ctypes.c_void_p, ctypes.wintypes.BOOL]
+_user32.SetTimer.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.UINT,
+                              ctypes.wintypes.UINT, ctypes.c_void_p]
+_user32.SetTimer.restype = ctypes.wintypes.UINT
+_user32.KillTimer.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.UINT]
+_user32.KillTimer.restype = ctypes.wintypes.BOOL
 
 WNDPROC = ctypes.WINFUNCTYPE(ctypes.wintypes.LPARAM, ctypes.wintypes.HWND,
                              ctypes.wintypes.UINT, ctypes.wintypes.WPARAM,
@@ -147,6 +164,10 @@ class FocusOverlay:
         self._rect: tuple[int, int, int, int] = (0, 0, 0, 0)
         self._visible = False
         self._running = False
+        # 动画状态 — 眼动仪式平滑过渡
+        self._anim_from: Optional[tuple[int, int, int, int]] = None
+        self._anim_to: Optional[tuple[int, int, int, int]] = None
+        self._anim_start: float = 0.0
 
     # ── public API ──
 
@@ -174,13 +195,27 @@ class FocusOverlay:
         self._hwnd = None
 
     def show_at(self, left: int, top: int, right: int, bottom: int):
-        """在指定位置显示高亮边框（线程安全）。"""
+        """在指定位置显示高亮边框，带眼动仪式平滑动画过渡。"""
+        target = (left, top, right, bottom)
         with self._lock:
-            self._rect = (left, top, right, bottom)
+            if self._visible and self._rect != (0, 0, 0, 0) and self._rect != target:
+                self._anim_from = self._rect
+            else:
+                self._anim_from = None  # 首次显示，直接定位
+            self._anim_to = target
+            self._anim_start = time.perf_counter()
             self._visible = True
+
         hwnd = self._hwnd
         if hwnd:
-            _user32.PostMessageW(hwnd, MSG_SHOW, 0, 0)
+            if self._anim_from:
+                # 启动 60fps 动画定时器
+                _user32.SetTimer(hwnd, TIMER_ANIM, 16, None)
+                _user32.PostMessageW(hwnd, MSG_SHOW, 0, 0)
+            else:
+                with self._lock:
+                    self._rect = target
+                _user32.PostMessageW(hwnd, MSG_SHOW, 0, 0)
 
     def hide(self):
         """隐藏高亮边框（线程安全）。"""
@@ -278,6 +313,10 @@ class FocusOverlay:
             _user32.ShowWindow(hwnd, SW_HIDE)
             return 0
 
+        if msg == WM_TIMER and wparam == TIMER_ANIM:
+            self._on_anim_tick(hwnd)
+            return 0
+
         return _user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
     def _handle_show(self, hwnd):
@@ -289,14 +328,13 @@ class FocusOverlay:
         _user32.InvalidateRect(hwnd, None, True)
 
     def _on_paint(self, hwnd):
-        """绘制高亮边框。"""
+        """绘制眼动仪风格辉光聚焦环 — 三层同心圆角矩形。"""
         with self._lock:
             if not self._visible:
                 return
             left, top, right, bottom = self._rect
 
         sx, sy, _, _ = self._screen_rect
-        # 转换为窗口相对坐标
         r_left = left - sx
         r_top = top - sy
         r_right = right - sx
@@ -304,17 +342,66 @@ class FocusOverlay:
 
         ps = PAINTSTRUCT()
         hdc = _user32.BeginPaint(hwnd, ctypes.byref(ps))
+        null_brush = _gdi32.GetStockObject(5)  # NULL_BRUSH
         try:
-            pen = _gdi32.CreatePen(0, BORDER_WIDTH, BORDER_COLOR)  # PS_SOLID=0
-            old_pen = _gdi32.SelectObject(hdc, pen)
-            old_brush = _gdi32.SelectObject(hdc, _gdi32.GetStockObject(5))  # NULL_BRUSH
-            _gdi32.RoundRect(hdc, r_left, r_top, r_right, r_bottom,
-                             BORDER_RADIUS, BORDER_RADIUS)
+            old_brush = _gdi32.SelectObject(hdc, null_brush)
+
+            # 外圈辉光 — 最宽最暗
+            outer_pen = _gdi32.CreatePen(0, BORDER_WIDTH_OUTER, GLOW_OUTER_COLOR)
+            old_pen = _gdi32.SelectObject(hdc, outer_pen)
+            _gdi32.RoundRect(hdc,
+                r_left - 6, r_top - 6, r_right + 6, r_bottom + 6,
+                BORDER_RADIUS_OUTER, BORDER_RADIUS_OUTER)
+
+            # 中圈辉光
+            _gdi32.SelectObject(hdc, _gdi32.GetStockObject(5))
+            _gdi32.DeleteObject(outer_pen)
+            mid_pen = _gdi32.CreatePen(0, BORDER_WIDTH_MID, GLOW_MID_COLOR)
+            _gdi32.SelectObject(hdc, mid_pen)
+            _gdi32.RoundRect(hdc,
+                r_left - 3, r_top - 3, r_right + 3, r_bottom + 3,
+                BORDER_RADIUS_MID, BORDER_RADIUS_MID)
+
+            # 主边框 — 最亮最细
+            _gdi32.SelectObject(hdc, _gdi32.GetStockObject(5))
+            _gdi32.DeleteObject(mid_pen)
+            main_pen = _gdi32.CreatePen(0, BORDER_WIDTH_MAIN, BORDER_COLOR)
+            _gdi32.SelectObject(hdc, main_pen)
+            _gdi32.RoundRect(hdc,
+                r_left, r_top, r_right, r_bottom,
+                BORDER_RADIUS_MAIN, BORDER_RADIUS_MAIN)
+
             _gdi32.SelectObject(hdc, old_brush)
             _gdi32.SelectObject(hdc, old_pen)
-            _gdi32.DeleteObject(pen)
+            _gdi32.DeleteObject(main_pen)
         finally:
             _user32.EndPaint(hwnd, ctypes.byref(ps))
+
+    def _on_anim_tick(self, hwnd):
+        """动画帧更新 — ease-out 三次缓动插值。"""
+        elapsed = time.perf_counter() - self._anim_start
+        t = min(elapsed / ANIM_DURATION, 1.0)
+        t = 1.0 - (1.0 - t) ** 3  # ease-out cubic
+
+        with self._lock:
+            if self._anim_from and self._anim_to:
+                fx, fy, fr, fb = self._anim_from
+                tx, ty, tr, tb = self._anim_to
+                self._rect = (
+                    int(fx + (tx - fx) * t),
+                    int(fy + (ty - fy) * t),
+                    int(fr + (tr - fr) * t),
+                    int(fb + (tb - fb) * t),
+                )
+
+        _user32.InvalidateRect(hwnd, None, True)
+
+        if t >= 1.0:
+            with self._lock:
+                if self._anim_to:
+                    self._rect = self._anim_to
+                self._anim_from = None
+            _user32.KillTimer(hwnd, TIMER_ANIM)
 
 
 # ─── Navigator ───
@@ -328,18 +415,26 @@ class _ElementInfo:
 
 
 class Navigator:
-    """UI 焦点导航引擎。
+    """UI 焦点导航引擎 — 三级层级导航。
 
-    通过 Windows UI Automation 枚举可交互元素，
-    实现方向性焦点跳转和元素操作。
+    Level 1 (窗口级): 在应用窗口 + 任务栏之间跳转
+        A → 进入窗口 (Level 2)
+        LT+摇杆 → 跳到最远
+        RT → 加速移动
 
-    Usage:
-        nav = Navigator()
-        nav.start()          # 启动覆盖层 + 扫描元素
-        nav.move_down()      # 焦点移到下方元素
-        nav.click()          # 点击当前焦点元素
-        nav.stop()           # 停止并清理
+    Level 2 (元素级): 在窗口内可交互元素之间跳转
+        B → 返回 Level 1
+        A → 点击 / 进入 Level 3 (可编辑控件)
+
+    Level 3 (输入级): 输入文字
+        B → 返回 Level 2
+        START → 切换输入语言 (Win+Space)
+        预留手柄打字接口
     """
+
+    LEVEL_WINDOWS = 0
+    LEVEL_ELEMENTS = 1
+    LEVEL_INPUT = 2
 
     # 可交互的控件类型
     INTERACTABLE_TYPES = {
@@ -348,19 +443,47 @@ class Navigator:
         "TabItemControl", "CheckBoxControl", "RadioButtonControl",
         "ComboBoxControl", "SliderControl", "SplitButtonControl",
         "ToggleButtonControl", "CalendarControl", "DataItemControl",
-        "ThumbControl", "ListControl",
+        "ThumbControl", "ListControl", "TextControl",
     }
+
+    # 浏览器网页内容扩展类型（ImageControl/GroupControl/CustomControl/PaneControl 常见于 DOM）
+    BROWSER_INTERACTABLE_TYPES = INTERACTABLE_TYPES | {
+        "ImageControl", "GroupControl", "CustomControl",
+        "DocumentControl", "DataGridControl", "HeaderControl",
+        "PaneControl",
+    }
+
+    # 视频网站窗口标题关键词
+    VIDEO_KEYWORDS = [
+        "bilibili", "哔哩哔哩", "B站",
+        "YouTube", "youtube",
+        "Netflix", "netflix",
+        "Prime Video", "Disney+",
+        "Twitch", "twitch",
+        "Vimeo", "vimeo",
+        "视频", "播放",
+    ]
 
     def __init__(self):
         self._lock = threading.RLock()
         self._overlay = FocusOverlay()
         self._focused: Optional[_ElementInfo] = None
         self._elements: list[_ElementInfo] = []
+        self._windows: list[_ElementInfo] = []
         self._active = False
+        self._level: int = self.LEVEL_WINDOWS
+        self._focused_window_ctrl = None  # 保存 UIA 控件引用（比 hwnd 更可靠）
+        self._input_ctrl = None           # Level 3 输入控件引用
+        self._video_context = False
+        self._speed_active = False
 
     @property
     def active(self) -> bool:
         return self._active
+
+    @property
+    def level(self) -> int:
+        return self._level
 
     @property
     def focused_element(self) -> Optional[object]:
@@ -372,15 +495,16 @@ class Navigator:
     # ── 生命周期 ──
 
     def start(self):
-        """启动导航器：创建覆盖层、扫描元素、聚焦第一个。"""
+        """启动导航器：Level 1 窗口级扫描。"""
         with self._lock:
             if self._active:
                 return
             self._active = True
+            self._level = self.LEVEL_WINDOWS
         self._overlay.start()
-        self._refresh_elements()
-        if self._elements:
-            self._focus_element(self._elements[0])
+        self._refresh_windows()
+        if self._windows:
+            self._focus_element(self._windows[0])
 
     def stop(self):
         """停止导航器：隐藏覆盖层、清理元素。"""
@@ -392,6 +516,47 @@ class Navigator:
         with self._lock:
             self._focused = None
             self._elements.clear()
+            self._windows.clear()
+
+    # ── 层级操作 ──
+
+    def enter_window(self):
+        """从窗口级进入元素级（A 键在 Level 1）。"""
+        if self._level != self.LEVEL_WINDOWS:
+            return
+        with self._lock:
+            if not self._focused:
+                return
+            ctrl = self._focused.control
+            self._focused_window_ctrl = ctrl
+
+        # 先将目标窗口拉到前台
+        self._bring_to_foreground(ctrl)
+
+        self._level = self.LEVEL_ELEMENTS
+        self._refresh_elements()
+        if self._elements:
+            self._focus_element(self._elements[0])
+        else:
+            # 无元素 — 回退
+            self._level = self.LEVEL_WINDOWS
+            self._focused_window_ctrl = None
+            print("[vim] 进入失败：窗口无可交互元素，已回退")
+
+    def back(self):
+        """B 键 — 输入级→元素级, 元素级→窗口级。"""
+        if self._level == self.LEVEL_INPUT:
+            self._level = self.LEVEL_ELEMENTS
+            self._input_ctrl = None
+            print("[vim] 返回 Level 2 元素级")
+            return
+        if self._level != self.LEVEL_ELEMENTS:
+            return
+        self._level = self.LEVEL_WINDOWS
+        self._focused_window_ctrl = None
+        self._refresh_windows()
+        if self._windows:
+            self._focus_element(self._windows[0])
 
     # ── 方向导航 ──
 
@@ -408,31 +573,74 @@ class Navigator:
         self._move_in_direction(1, 0)
 
     def _move_in_direction(self, dx: int, dy: int):
+        # Level 3 输入模式：方向导航被阻止
+        if self._level == self.LEVEL_INPUT:
+            return
+
+        # 视频上下文 — 方向键改为媒体控制
+        self._video_context = self._detect_video_context()
+        if self._video_context:
+            self._send_video_dpad(dx, dy)
+            return
+
         with self._lock:
             if not self._active or not self._focused:
                 return
             current = self._focused
+            # 使用缓存列表，不重新扫描（响应快）
+            candidates = (list(self._windows) if self._level == self.LEVEL_WINDOWS
+                          else list(self._elements))
 
-        # 重新扫描（元素树可能已变化）
-        self._refresh_elements()
+        if not candidates:
+            return
 
-        nearest = self._find_nearest(current, dx, dy)
+        nearest = self._find_nearest(current, dx, dy, candidates)
         if nearest:
             self._focus_element(nearest)
+
+    def jump_to_end(self, dx: int, dy: int):
+        """LT+摇杆：跳到目标方向最远元素。"""
+        if self._level == self.LEVEL_INPUT:
+            return
+        with self._lock:
+            if not self._active or not self._focused:
+                return
+            current = self._focused
+            candidates = (list(self._windows) if self._level == self.LEVEL_WINDOWS
+                          else list(self._elements))
+
+        if not candidates:
+            return
+        farthest = self._find_farthest(current, dx, dy, candidates)
+        if farthest:
+            self._focus_element(farthest)
 
     # ── 元素操作 ──
 
     def click(self):
-        """左键点击当前焦点元素。"""
-        ctrl = self._get_focused_control()
-        if ctrl:
-            try:
-                ctrl.Click()
-            except Exception:
-                pass
+        """A 键 — 窗口级:进入, 元素级:点击(可编辑→L3), 输入级:点击。"""
+        if self._level == self.LEVEL_WINDOWS:
+            self.enter_window()
+        elif self._level == self.LEVEL_ELEMENTS:
+            ctrl = self._get_focused_control()
+            if ctrl:
+                try:
+                    ctrl.Click()
+                except Exception:
+                    pass
+                if self._is_editable_control(ctrl):
+                    self._level = self.LEVEL_INPUT
+                    self._input_ctrl = ctrl
+                    print("[vim] ★ 进入 Level 3 输入模式 (START=切换语言, B=退出)")
+        else:  # LEVEL_INPUT
+            ctrl = self._get_focused_control()
+            if ctrl:
+                try:
+                    ctrl.Click()
+                except Exception:
+                    pass
 
     def right_click(self):
-        """右键点击当前焦点元素。"""
         ctrl = self._get_focused_control()
         if ctrl:
             try:
@@ -441,7 +649,6 @@ class Navigator:
                 pass
 
     def double_click(self):
-        """双击当前焦点元素。"""
         ctrl = self._get_focused_control()
         if ctrl:
             try:
@@ -450,27 +657,45 @@ class Navigator:
                 pass
 
     def enter(self):
-        """对焦点元素发送 Enter。"""
-        ctrl = self._get_focused_control()
-        if ctrl:
+        """START — 输入级:切换语言, 其他:发送 Enter。"""
+        if self._level == self.LEVEL_INPUT:
+            self.switch_input()
+        else:
+            ctrl = self._get_focused_control()
+            if ctrl:
+                try:
+                    ctrl.SendKeys("{Enter}")
+                except Exception:
+                    pass
+
+    def escape(self):
+        """B 键 — 输入级:返回L2, 元素级:返回L1, 窗口级:发送 Esc。"""
+        if self._level in (self.LEVEL_INPUT, self.LEVEL_ELEMENTS):
+            self.back()
+        else:
             try:
-                ctrl.SendKeys("{Enter}")
+                import uiautomation as auto
+                auto.SendKeys("{Esc}")
             except Exception:
                 pass
 
-    def escape(self):
-        """发送 Escape 键（关闭弹窗/退出焦点）。"""
-        try:
-            import uiautomation as auto
-            auto.SendKeys("{Esc}")
-        except Exception:
-            pass
-
     def tab(self):
-        """发送 Tab 键（原生焦点顺序回退）。"""
         try:
             import uiautomation as auto
             auto.SendKeys("{Tab}")
+        except Exception:
+            pass
+
+    def switch_input(self):
+        """切换输入语言 (Win+Space)。"""
+        try:
+            from pynput.keyboard import Key, Controller as KBController
+            kb = KBController()
+            kb.press(Key.cmd)
+            kb.press(Key.space)
+            kb.release(Key.space)
+            kb.release(Key.cmd)
+            print("[vim] Win+Space — 输入语言已切换")
         except Exception:
             pass
 
@@ -481,7 +706,6 @@ class Navigator:
         self._scroll(1)
 
     def _scroll(self, direction: int):
-        """滚动焦点元素。direction: -1=上, 1=下。"""
         ctrl = self._get_focused_control()
         if not ctrl:
             return
@@ -498,7 +722,6 @@ class Navigator:
             pass
 
     def prev_tab(self):
-        """Ctrl+Shift+Tab — 上一个标签页。"""
         try:
             import uiautomation as auto
             auto.SendKeys("{Ctrl}{Shift}{Tab}")
@@ -506,7 +729,6 @@ class Navigator:
             pass
 
     def next_tab(self):
-        """Ctrl+Tab — 下一个标签页。"""
         try:
             import uiautomation as auto
             auto.SendKeys("{Ctrl}{Tab}")
@@ -514,10 +736,82 @@ class Navigator:
             pass
 
     def refresh(self):
-        """重新扫描元素树（如弹窗打开后）。"""
-        self._refresh_elements()
-        if self._elements:
-            self._focus_element(self._elements[0])
+        if self._level == self.LEVEL_WINDOWS:
+            self._refresh_windows()
+            if self._windows:
+                self._focus_element(self._windows[0])
+        else:
+            self._refresh_elements()
+            if self._elements:
+                self._focus_element(self._elements[0])
+
+    def task_view(self):
+        """打开 Windows 任务视图 (Win+Tab) — 一次性查看所有窗口。"""
+        try:
+            from pynput.keyboard import Key, Controller as KBController
+            kb = KBController()
+            kb.press(Key.cmd)
+            kb.press(Key.tab)
+            kb.release(Key.tab)
+            kb.release(Key.cmd)
+        except Exception:
+            pass
+
+    # ── 视频上下文适配 ──
+
+    def _detect_video_context(self) -> bool:
+        try:
+            import uiautomation as auto
+            fg = auto.GetForegroundControl()
+            if fg and fg.Name:
+                title = fg.Name.lower()
+                for kw in self.VIDEO_KEYWORDS:
+                    if kw.lower() in title:
+                        return True
+        except Exception:
+            pass
+        return False
+
+    def _send_video_dpad(self, dx: int, dy: int):
+        try:
+            from pynput.keyboard import Key, Controller as KBController
+            kb = KBController()
+            if dy < 0:
+                kb.tap(Key.up)
+            elif dy > 0:
+                kb.tap(Key.down)
+            elif dx < 0:
+                kb.tap(Key.left)
+            elif dx > 0:
+                kb.tap(Key.right)
+        except Exception:
+            pass
+
+    def speed_start(self):
+        try:
+            from pynput.keyboard import Key, Controller as KBController
+            kb = KBController()
+            for _ in range(3):
+                kb.press(Key.shift)
+                kb.press('.')
+                kb.release('.')
+                kb.release(Key.shift)
+                time.sleep(0.03)
+        except Exception:
+            pass
+
+    def speed_end(self):
+        try:
+            from pynput.keyboard import Key, Controller as KBController
+            kb = KBController()
+            for _ in range(3):
+                kb.press(Key.shift)
+                kb.press(',')
+                kb.release(',')
+                kb.release(Key.shift)
+                time.sleep(0.03)
+        except Exception:
+            pass
 
     # ── 内部方法 ──
 
@@ -527,46 +821,414 @@ class Navigator:
                 return self._focused.control
         return None
 
-    def _refresh_elements(self):
-        """扫描前台窗口的可交互 UI 元素。"""
-        elements: list[_ElementInfo] = []
+    @staticmethod
+    def _bring_to_foreground(ctrl) -> None:
+        """将 UIA 控件对应的窗口拉到前台。"""
+        try:
+            hwnd = ctrl.NativeWindowHandle
+            if hwnd:
+                # ShowWindow + SetForegroundWindow 双保险
+                _user32.ShowWindow(hwnd, SW_RESTORE)
+                _user32.SetForegroundWindow(hwnd)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _is_editable_control(ctrl) -> bool:
+        """检测控件是否为可编辑输入框（决定是否进入 Level 3）。"""
+        try:
+            if ctrl.ControlTypeName == "EditControl":
+                return True
+            # 某些可编辑 ComboBox / Document 支持 ValuePattern
+            if hasattr(ctrl, "GetValuePattern"):
+                try:
+                    vp = ctrl.GetValuePattern()
+                    if vp and not getattr(vp, "IsReadOnly", True):
+                        return True
+                except Exception:
+                    pass
+            # 检查是否支持 TextPattern（富文本编辑）
+            if hasattr(ctrl, "GetTextPattern"):
+                try:
+                    ctrl.GetTextPattern()
+                    return True
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def _is_browser_window(ctrl) -> bool:
+        """检测是否为浏览器窗口（Chrome / Edge / Firefox）。"""
+        try:
+            name = (ctrl.Name or "").lower()
+            cls = (getattr(ctrl, "ClassName", "") or "").lower()
+            browser_markers = [
+                "chrome", "chromium", "mozilla", "firefox",
+                "edge", "msedge", "browser", "opera", "brave",
+            ]
+            for marker in browser_markers:
+                if marker in name or marker in cls:
+                    return True
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def _find_document_control(ctrl) -> object | None:
+        """递归 BFS 搜索浏览器网页 DocumentControl（DOM 根节点），最多 6 层。"""
+        from collections import deque
+        visited = set()
+        queue = deque()
+        try:
+            queue.append((ctrl, 0))
+            while queue:
+                node, depth = queue.popleft()
+                if depth > 6:
+                    continue
+                try:
+                    node_id = node.BoundingRectangle
+                except Exception:
+                    node_id = id(node)
+                if node_id in visited:
+                    continue
+                visited.add(node_id)
+                try:
+                    if node.ControlTypeName == "DocumentControl":
+                        return node
+                except Exception:
+                    continue
+                try:
+                    for child in node.GetChildren():
+                        queue.append((child, depth + 1))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _find_render_host(ctrl) -> object | None:
+        """查找浏览器渲染宿主控件（Chrome/Edge 的渲染进程容器）。
+
+        在 Chromium 浏览器中，是 ClassName=Chrome_RenderWidgetHostHWND 的 PaneControl。
+        Firefox 使用 MozillaContentWindowClass。
+        """
+        from collections import deque
+        render_host_classes = {
+            "chrome_renderwidgethosthwnd",
+            "chromerenderwidgethosthwnd",
+            "mozillacontentwindowclass",
+            "mozillawindowclass",
+        }
+        visited = set()
+        queue = deque()
+        try:
+            queue.append((ctrl, 0))
+            while queue:
+                node, depth = queue.popleft()
+                if depth > 5:
+                    continue
+                try:
+                    node_id = node.BoundingRectangle
+                except Exception:
+                    node_id = id(node)
+                if node_id in visited:
+                    continue
+                visited.add(node_id)
+                try:
+                    cls_name = (getattr(node, "ClassName", "") or "").lower()
+                    if cls_name in render_host_classes:
+                        return node
+                except Exception:
+                    pass
+                try:
+                    for child in node.GetChildren():
+                        queue.append((child, depth + 1))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _find_content_view(ctrl) -> object | None:
+        """查找浏览器内容容器（ClientView / BrowserView）。
+
+        Edge: BrowserView 是主内容区域（包含标签栏+地址栏+网页内容）。
+        Chrome: ClientView 是主内容区域。
+        """
+        from collections import deque
+        content_view_classes = {"clientview", "browserview", "rootview"}
+        visited = set()
+        queue = deque()
+        try:
+            queue.append((ctrl, 0))
+            while queue:
+                node, depth = queue.popleft()
+                if depth > 6:
+                    continue
+                try:
+                    node_id = node.BoundingRectangle
+                except Exception:
+                    node_id = id(node)
+                if node_id in visited:
+                    continue
+                visited.add(node_id)
+                try:
+                    cls_name = (getattr(node, "ClassName", "") or "").lower()
+                    if cls_name in content_view_classes:
+                        return node
+                except Exception:
+                    pass
+                try:
+                    for child in node.GetChildren():
+                        queue.append((child, depth + 1))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _dump_tree_structure(ctrl, max_depth: int = 4, prefix: str = ""):
+        """诊断：打印 UIA 树结构（前几层），用于排查浏览器适配问题。"""
+        if max_depth <= 0:
+            return
+        try:
+            type_name = ctrl.ControlTypeName
+            name = (ctrl.Name or "")[:30]
+            cls_name = (getattr(ctrl, "ClassName", "") or "")[:30]
+            rect = ctrl.BoundingRectangle
+            children_count = 0
+            try:
+                children_count = len(ctrl.GetChildren())
+            except Exception:
+                pass
+            print(f"{prefix}[L{max_depth}] {type_name} cls={cls_name} "
+                  f"name=\"{name}\" rect={rect.width():.0f}x{rect.height():.0f} "
+                  f"children={children_count} enabled={ctrl.IsEnabled}")
+        except Exception as e:
+            print(f"{prefix}? error: {e}")
+            return
+
+        try:
+            for child in ctrl.GetChildren():
+                Navigator._dump_tree_structure(child, max_depth - 1, prefix + "  ")
+        except Exception:
+            pass
+
+    def _refresh_windows(self):
+        """扫描所有顶层窗口 + 任务栏（Level 1）。"""
+        windows: list[_ElementInfo] = []
         try:
             import uiautomation as auto
-
-            # 获取前台窗口
-            fg_hwnd = _user32.GetForegroundWindow()
-            if not fg_hwnd:
-                with self._lock:
-                    self._elements = elements
+            desktop = auto.GetRootControl()
+            if not desktop:
                 return
+            for child in desktop.GetChildren():
+                try:
+                    if child.ControlTypeName != "WindowControl":
+                        continue
+                    name = (child.Name or "").strip()
+                    if not name or name in ("Program Manager",):
+                        continue
+                    rect = child.BoundingRectangle
+                    w, h = rect.width(), rect.height()
+                    if w < 100 or h < 50:
+                        continue
+                    if not child.IsEnabled:
+                        continue
+                    if child.IsOffscreen:
+                        continue
+                    windows.append(_ElementInfo(
+                        control=child,
+                        rect=(rect.left, rect.top, rect.right, rect.bottom),
+                        center=(rect.xcenter(), rect.ycenter()),
+                    ))
+                except Exception:
+                    continue
 
-            fg_ctrl = auto.ControlFromHandle(fg_hwnd)
-            if not fg_ctrl:
-                with self._lock:
-                    self._elements = elements
-                return
+            # 任务栏 — 多方法检测
+            taskbar_found = False
+            taskbar = None
+            try:
+                taskbar = auto.ControlFromClassName("Shell_TrayWnd")
+            except Exception:
+                pass
+            if taskbar is None:
+                try:
+                    taskbar = auto.ControlFromClassName("MSTaskSwWClass")
+                except Exception:
+                    pass
+            if taskbar:
+                try:
+                    rect = taskbar.BoundingRectangle
+                    if rect.width() > 0 and rect.height() > 0:
+                        windows.append(_ElementInfo(
+                            control=taskbar,
+                            rect=(rect.left, rect.top, rect.right, rect.bottom),
+                            center=(rect.xcenter(), rect.ycenter()),
+                        ))
+                        taskbar_found = True
+                except Exception:
+                    pass
 
-            self._walk_tree(fg_ctrl, elements, depth=0, max_depth=8)
+            # 回退：从桌面枚举中查找任务栏
+            if not taskbar_found:
+                for child in desktop.GetChildren():
+                    try:
+                        if child.ControlTypeName == "PaneControl":
+                            name = (child.Name or "").lower()
+                            cls = getattr(child, "ClassName", "") or ""
+                            if "task" in name or "tray" in cls.lower() or "mstask" in cls.lower():
+                                rect = child.BoundingRectangle
+                                if rect.width() > 0 and rect.height() > 0:
+                                    windows.append(_ElementInfo(
+                                        control=child,
+                                        rect=(rect.left, rect.top, rect.right, rect.bottom),
+                                        center=(rect.xcenter(), rect.ycenter()),
+                                    ))
+                                    break
+                    except Exception:
+                        continue
+
+            print(f"[vim] _refresh_windows: {len(windows)} 个窗口 + 任务栏{'√' if taskbar_found else '✗'}")
+            for w in windows:
+                try:
+                    name = (w.control.Name or "")[:50]
+                    r = w.rect
+                    print(f"  [{r[2]-r[0]}x{r[3]-r[1]}] {name}")
+                except Exception:
+                    pass
         except Exception:
             pass
 
         with self._lock:
+            self._windows = windows
+
+    def _refresh_elements(self):
+        """扫描可交互 UI 元素（Level 2，限定窗口内）。
+
+        浏览器窗口特殊处理：
+        1. 先找 ContentView (ClientView/BrowserView) — Edge/Chrome 主内容容器
+        2. 再找 DocumentControl（DOM 根）
+        3. 再找 RenderHost（Chrome_RenderWidgetHostHWND 等）
+        4. 都找不到则从窗口根扫描 + dump 树结构诊断
+        """
+        elements: list[_ElementInfo] = []
+        with self._lock:
+            ctrl = self._focused_window_ctrl
+
+        if ctrl is None:
+            with self._lock:
+                self._elements = elements
+            return
+
+        try:
+            is_browser = self._is_browser_window(ctrl)
+
+            if is_browser:
+                types = self.BROWSER_INTERACTABLE_TYPES
+                max_depth = 16
+                found_entry = False
+
+                # 路径 1：找 ContentView (Edge BrowserView / Chrome ClientView)
+                content_view = self._find_content_view(ctrl)
+                if content_view is not None:
+                    cv_cls = getattr(content_view, "ClassName", "") or ""
+                    print(f"[vim] ✓ 找到 ContentView cls={cv_cls}，从内容容器扫描")
+                    self._walk_tree(content_view, elements, depth=0, max_depth=max_depth,
+                                    types=types, off_screen_ok=True)
+                    found_entry = True
+
+                # 路径 2：找 DocumentControl（DOM 根）
+                if not found_entry:
+                    doc = self._find_document_control(ctrl)
+                    if doc is not None:
+                        print("[vim] ✓ 找到 DocumentControl，从 DOM 根扫描")
+                        self._walk_tree(doc, elements, depth=0, max_depth=max_depth,
+                                        types=types, off_screen_ok=True)
+                        found_entry = True
+
+                # 路径 3：找 RenderHost（Chrome_RenderWidgetHostHWND / Mozilla）
+                if not found_entry:
+                    host = self._find_render_host(ctrl)
+                    if host is not None:
+                        cls = getattr(host, "ClassName", "") or ""
+                        print(f"[vim] ✓ 找到 RenderHost cls={cls}，从内容容器扫描")
+                        self._walk_tree(host, elements, depth=0, max_depth=max_depth,
+                                        types=types, off_screen_ok=True)
+                        found_entry = True
+
+                # 同时扫描浏览器外壳元素（浅层足够覆盖标签栏/地址栏/按钮）
+                self._walk_tree(ctrl, elements, depth=0, max_depth=5,
+                                types=self.INTERACTABLE_TYPES)
+
+                if not found_entry:
+                    print("[vim] ✗ 未找到内容容器/DocumentControl，dump 树结构：")
+                    self._dump_tree_structure(ctrl, max_depth=4)
+            else:
+                self._walk_tree(ctrl, elements, depth=0, max_depth=8,
+                                types=self.INTERACTABLE_TYPES)
+
+            # 去重
+            seen = set()
+            unique = []
+            for e in elements:
+                try:
+                    rid = e.control.BoundingRectangle
+                    key = (rid.left, rid.top, rid.right, rid.bottom,
+                           getattr(e.control, "Name", ""))
+                except Exception:
+                    key = id(e.control)
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(e)
+            elements = unique
+
+            # 类型统计
+            type_counts: dict[str, int] = {}
+            for e in elements:
+                try:
+                    t = e.control.ControlTypeName
+                    type_counts[t] = type_counts.get(t, 0) + 1
+                except Exception:
+                    pass
+            # Chrome/Chromium 可访问性提示
+            if is_browser and found_entry and len(elements) < 30:
+                non_pane = sum(c for t, c in type_counts.items() if t != "PaneControl")
+                if non_pane < 10:
+                    print("[vim] ⚠ Chrome 未开启无障碍访问 —— 网页内容不可达。")
+                    print("[vim]    方案1: 用 Edge 浏览器打开网页 (Edge 原生支持 UIA)")
+                    print("[vim]    方案2: Chrome 启动时加 --force-renderer-accessibility 参数")
+
+            print(f"[vim] _refresh_elements: {len(elements)} 个元素 "
+                  f"(browser={is_browser}) 类型: {dict(sorted(type_counts.items()))}"
+                  if type_counts else
+                  f"[vim] _refresh_elements: {len(elements)} 个元素 (browser={is_browser})")
+        except Exception as e:
+            print(f"[vim] _refresh_elements 异常: {e}")
+
+        with self._lock:
             self._elements = elements
 
-    def _walk_tree(self, control, elements: list[_ElementInfo], depth: int, max_depth: int):
-        """递归遍历 UIA 控件树，收集可交互元素。"""
+    def _walk_tree(self, control, elements: list[_ElementInfo], depth: int, max_depth: int,
+                   types: set[str] | None = None, off_screen_ok: bool = False):
         if depth > max_depth:
             return
 
-        import uiautomation as auto
+        if types is None:
+            types = self.INTERACTABLE_TYPES
 
+        # 检查当前控件是否可交互
         try:
             type_name = control.ControlTypeName
-            if type_name in self.INTERACTABLE_TYPES:
-                if control.IsEnabled and not control.IsOffscreen:
+            if type_name in types:
+                if control.IsEnabled and (off_screen_ok or not control.IsOffscreen):
                     rect = control.BoundingRectangle
                     if rect.width() > 4 and rect.height() > 4:
-                        # 检查元素在屏幕范围内
                         sw, sh = self._get_screen_size()
                         if rect.right > 0 and rect.bottom > 0 and \
                            rect.left < sw and rect.top < sh:
@@ -576,31 +1238,24 @@ class Navigator:
                                 center=(rect.xcenter(), rect.ycenter()),
                             ))
         except Exception:
-            return  # 跳过无法访问的元素
+            pass  # 当前控件异常不阻止遍历子节点
 
+        # 遍历子节点
         try:
             for child in control.GetChildren():
-                self._walk_tree(child, elements, depth + 1, max_depth)
+                self._walk_tree(child, elements, depth + 1, max_depth, types, off_screen_ok)
         except Exception:
             pass
 
     def _focus_element(self, elem: _ElementInfo):
-        """设置焦点元素并更新覆盖层。"""
         with self._lock:
             self._focused = elem
             left, top, right, bottom = elem.rect
         self._overlay.show_at(left, top, right, bottom)
 
-    def _find_nearest(self, current: _ElementInfo, dx: int, dy: int) -> Optional[_ElementInfo]:
-        """在指定方向找最近的候选元素。
-
-        算法：基于 W3C Spatial Navigation + BBC LRUD 启发式。
-        1. 过滤：仅保留在目标方向的候选
-        2. 计分：主轴向距离 + 正交偏差 × 0.3 - 重叠奖励
-        """
-        with self._lock:
-            candidates = list(self._elements)
-
+    def _find_nearest(self, current: _ElementInfo, dx: int, dy: int,
+                      candidates: list[_ElementInfo]) -> Optional[_ElementInfo]:
+        """在 candidates 中找指定方向最近的元素。"""
         if not candidates:
             return None
 
@@ -614,29 +1269,27 @@ class Navigator:
             tl, tt, tr, tb = cand.rect
             tx, ty = cand.center
 
-            if dy < 0:  # 向上
+            if dy < 0:          # 向上
                 if tb > ct - 2:
-                    continue  # 不在上方
+                    continue
                 primary_dist = ct - tb
-            elif dy > 0:  # 向下
+            elif dy > 0:        # 向下
                 if tt < cb + 2:
-                    continue  # 不在下方
+                    continue
                 primary_dist = tt - cb
-            elif dx < 0:  # 向左
+            elif dx < 0:        # 向左
                 if tr > cl - 2:
                     continue
                 primary_dist = cl - tr
-            else:  # 向右
+            else:               # 向右
                 if tl < cr + 2:
                     continue
                 primary_dist = tl - cr
 
-            # 正交偏差
-            if dy != 0:  # 垂直移动
+            if dy != 0:
                 perp_dist = abs(tx - cx)
-                # 重叠奖励
                 overlap = min(cr, tr) - max(cl, tl)
-            else:  # 水平移动
+            else:
                 perp_dist = abs(ty - cy)
                 overlap = min(cb, tb) - max(ct, tt)
 
@@ -649,6 +1302,55 @@ class Navigator:
 
         scored.sort(key=lambda s: s[0])
         return scored[0][1]
+
+    def _find_farthest(self, current: _ElementInfo, dx: int, dy: int,
+                       candidates: list[_ElementInfo]) -> Optional[_ElementInfo]:
+        """在 candidates 中找指定方向最远的元素（LT+摇杆跳转）。"""
+        if not candidates:
+            return None
+
+        cx, cy = current.center
+        cl, ct, cr, cb = current.rect
+
+        best = None
+        best_score = -1e9
+
+        for cand in candidates:
+            if cand is current:
+                continue
+            tl, tt, tr, tb = cand.rect
+            tx, ty = cand.center
+
+            if dy < 0:          # 向上：候选底部必须在当前顶部之上
+                if tb > ct - 2:
+                    continue
+                primary_dist = ct - tb
+            elif dy > 0:        # 向下
+                if tt < cb + 2:
+                    continue
+                primary_dist = tt - cb
+            elif dx < 0:        # 向左
+                if tr > cl - 2:
+                    continue
+                primary_dist = cl - tr
+            else:               # 向右
+                if tl < cr + 2:
+                    continue
+                primary_dist = tl - cr
+
+            # 正交偏差惩罚（对齐优先，但权重较低）
+            if dy != 0:
+                perp_dist = abs(tx - cx)
+            else:
+                perp_dist = abs(ty - cy)
+
+            # 得分：距离越远越好，但不要太偏
+            score = primary_dist - perp_dist * 0.4
+            if score > best_score:
+                best_score = score
+                best = cand
+
+        return best
 
     @staticmethod
     def _get_screen_size() -> tuple[int, int]:

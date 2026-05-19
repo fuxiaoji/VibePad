@@ -69,6 +69,7 @@ class ModeEngine:
             sensitivity=config.global_.mouse_sensitivity,
             scroll_sensitivity=config.global_.scroll_sensitivity,
             curve=curve_from_string(config.global_.cursor_speed_curve),
+            speed_boost=config.global_.mouse_speed_boost,
         )
         self.keys = KeySimulator()
         self.navigator = Navigator()
@@ -84,6 +85,17 @@ class ModeEngine:
 
         # 按钮边沿检测（区分"刚按下"和"持续按住"）
         self._prev_buttons: dict[Button, bool] = {b: False for b in Button}
+
+        # RT 扳机模拟值平滑 & 边沿检测（绕过按钮事件系统，直接读模拟量）
+        self._rt_smoothed = 0.0
+        self._rt_speed_active = False  # 视频倍速是否已触发
+        self._rt_sticky_frames = 0     # 粘性释放计数器（防止 raw 抖动导致闪烁）
+        self._dbg_frame = 0  # 调试用帧计数
+
+        # 左摇杆焦点导航状态（vim 模式）
+        self._stick_nav_cooldown = 0.0
+        self._stick_nav_dir = (0, 0)
+        self._stick_jump_cooldown = 0.0  # LT+摇杆跳转冷却
 
     @property
     def current_mode(self) -> str:
@@ -101,7 +113,7 @@ class ModeEngine:
             self.navigator.stop()
 
     def tick(self):
-        """每帧调用一次。处理摇杆→鼠标移动、滚轮持续输入。"""
+        """每帧调用一次。处理摇杆→鼠标移动、滚轮、RT 扳机加速。"""
         now = time.monotonic()
         dt = now - self._last_tick
         self._last_tick = now
@@ -115,12 +127,61 @@ class ModeEngine:
 
         mappings = mode.mappings
 
+        # --- RT 扳机模拟值（EMA 平滑 + 粘性释放，抗抖动） ---
+        raw_rt = state.right_trigger.value
+        alpha = 0.2  # 稍小平滑系数，更抗噪
+        self._rt_smoothed += alpha * (raw_rt - self._rt_smoothed)
+        rt_now = self._rt_smoothed > 0.25
+
+        # 粘性释放：激活即时响应，松开需连续 8 帧 (~130ms) 确认
+        if rt_now:
+            self._rt_sticky_frames = 0
+        else:
+            self._rt_sticky_frames += 1
+
+        rt_active = self._rt_sticky_frames < 8
+
+        # 调试：每秒输出一次
+        self._dbg_frame += 1
+        if self._dbg_frame % 60 == 1:
+            print(f"[RT debug] raw={raw_rt:.3f} smoothed={self._rt_smoothed:.3f} "
+                  f"sticky={self._rt_sticky_frames} active={rt_active} "
+                  f"boost={self.mouse._speed_boost_active} mode={self._current_mode}")
+
+        # 鼠标加速 — 所有模式通用，RT 按住时光标变快
+        self.mouse.set_speed_boost(rt_active)
+
+        # --- 左摇杆焦点导航（vim 模式） ---
+        if self._current_mode == "vim" and self.navigator.active:
+            lt_active = state.left_trigger.value > 0.25
+            stick_active = abs(state.left_stick.x) > 0.5 or abs(state.left_stick.y) > 0.5
+
+            if lt_active and stick_active:
+                # LT + 摇杆 → 跳到最远
+                self._handle_stick_jump(state.left_stick.x, state.left_stick.y, dt)
+            elif not lt_active:
+                # 普通摇杆导航
+                self._handle_stick_nav(state.left_stick.x, state.left_stick.y, dt)
+
+        # 视频倍速 — vim 模式 + 视频上下文，边沿触发防止重复调用
+        if self._current_mode == "vim" and self.navigator.active:
+            if rt_active and not self._rt_speed_active:
+                self.navigator.speed_start()
+                self._rt_speed_active = True
+            elif not rt_active and self._rt_speed_active:
+                self.navigator.speed_end()
+                self._rt_speed_active = False
+        else:
+            # 非 vim 模式，确保倍速状态重置
+            if self._rt_speed_active:
+                self.navigator.speed_end()
+                self._rt_speed_active = False
+
         # --- 摇杆→鼠标移动 ---
         if "LEFT_STICK_X" in mappings and mappings["LEFT_STICK_X"] == "mouse_x":
             self.mouse.move(state.left_stick.x, state.left_stick.y, dt)
 
         # --- 右摇杆→滚轮 ---
-        # 滚轮用 accumulate 方式：每帧根据摇杆值滚固定量
         scroll_x_action = mappings.get("RIGHT_STICK_X", "")
         scroll_y_action = mappings.get("RIGHT_STICK_Y", "")
         if scroll_x_action == "scroll_x" or scroll_y_action == "scroll_y":
@@ -164,7 +225,10 @@ class ModeEngine:
             self._switch_hold_start[btn] = now
             self._switch_was_pressed.add(btn)
         elif action_type == ActionType.NAVIGATE:
-            self._nav_action(param)
+            if param == "speed_hold":
+                self.navigator.speed_start()
+            else:
+                self._nav_action(param)
 
     def _handle_release(self, btn: Button, action_type: ActionType, param: str, now: float):
         if action_type == ActionType.MOUSE:
@@ -178,6 +242,9 @@ class ModeEngine:
                 if hold_duration < self._hold_threshold:
                     # 短按 → 切换模式
                     self._switch_mode(param)
+        elif action_type == ActionType.NAVIGATE:
+            if param == "speed_hold":
+                self.navigator.speed_end()
 
     def _switch_mode(self, target_mode: str):
         """切换到目标模式。"""
@@ -223,10 +290,83 @@ class ModeEngine:
             "prev_tab": nav.prev_tab,
             "next_tab": nav.next_tab,
             "refresh": nav.refresh,
+            "task_view": nav.task_view,
+            "switch_input": nav.switch_input,
         }
         fn = dispatch.get(action)
         if fn:
             fn()
+
+    def _handle_stick_nav(self, stick_x: float, stick_y: float, dt: float):
+        """左摇杆控制焦点导航（vim 模式）。
+
+        带死区和冷却，防止误触发。方向变化时立即响应，
+        持续推住则按固定间隔重复。
+        """
+        deadzone = 0.5
+        repeat_delay = 0.2  # 200ms 重复间隔
+
+        # 确定主导方向
+        dir_x = 0
+        dir_y = 0
+        if abs(stick_x) > abs(stick_y):
+            if stick_x > deadzone:
+                dir_x = 1
+            elif stick_x < -deadzone:
+                dir_x = -1
+        else:
+            if stick_y > deadzone:
+                dir_y = 1
+            elif stick_y < -deadzone:
+                dir_y = -1
+
+        new_dir = (dir_x, dir_y)
+        if new_dir != self._stick_nav_dir:
+            self._stick_nav_dir = new_dir
+            self._stick_nav_cooldown = 0.0  # 方向变化立即响应
+
+        if new_dir == (0, 0):
+            return  # 摇杆居中，不移动
+
+        self._stick_nav_cooldown -= dt
+        if self._stick_nav_cooldown > 0:
+            return
+
+        if dir_x > 0:
+            self.navigator.move_right()
+        elif dir_x < 0:
+            self.navigator.move_left()
+        elif dir_y > 0:
+            self.navigator.move_down()
+        elif dir_y < 0:
+            self.navigator.move_up()
+
+        self._stick_nav_cooldown = repeat_delay
+
+    def _handle_stick_jump(self, stick_x: float, stick_y: float, dt: float):
+        """LT+摇杆：跳到目标方向最远元素。"""
+        deadzone = 0.5
+        cooldown = 0.35  # 跳转冷却比普通导航稍长
+
+        self._stick_jump_cooldown -= dt
+        if self._stick_jump_cooldown > 0:
+            return
+
+        dir_x, dir_y = 0, 0
+        if abs(stick_x) > abs(stick_y):
+            if stick_x > deadzone:
+                dir_x = 1
+            elif stick_x < -deadzone:
+                dir_x = -1
+        else:
+            if stick_y > deadzone:
+                dir_y = 1
+            elif stick_y < -deadzone:
+                dir_y = -1
+
+        if dir_x != 0 or dir_y != 0:
+            self.navigator.jump_to_end(dir_x, dir_y)
+            self._stick_jump_cooldown = cooldown
 
     @staticmethod
     def _mode_has_nav(mode: ModeConfig | None) -> bool:
@@ -246,6 +386,8 @@ class ModeEngine:
         elif action == "middle":
             if pressed:
                 self.mouse.click_middle()
+        elif action == "speed_hold":
+            self.mouse.set_speed_boost(pressed)
         elif action == "x":
             pass  # 摇杆移动在 tick() 中处理
         elif action == "y":

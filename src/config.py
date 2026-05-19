@@ -19,6 +19,7 @@ class GlobalConfig:
     deadzone: float = 0.15
     cursor_speed_curve: str = "linear"
     mode_switch_hold_ms: int = 500
+    mouse_speed_boost: float = 2.0
 
 
 @dataclass
@@ -60,6 +61,7 @@ def load_config(path: Union[str, Path] = "config.yaml") -> AppConfig:
         deadzone=global_raw.get("deadzone", 0.15),
         cursor_speed_curve=global_raw.get("cursor_speed_curve", "linear"),
         mode_switch_hold_ms=global_raw.get("mode_switch_hold_ms", 500),
+        mouse_speed_boost=global_raw.get("mouse_speed_boost", 2.0),
     )
 
     modes = {}
@@ -82,6 +84,7 @@ def save_config(config: AppConfig, path: Union[str, Path] = "config.yaml"):
             "deadzone": config.global_.deadzone,
             "cursor_speed_curve": config.global_.cursor_speed_curve,
             "mode_switch_hold_ms": config.global_.mode_switch_hold_ms,
+            "mouse_speed_boost": config.global_.mouse_speed_boost,
         },
         "modes": {
             name: {

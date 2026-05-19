@@ -35,11 +35,14 @@ class MouseSimulator:
         scroll_sensitivity: float = 1.0,
         curve: SpeedCurve = SpeedCurve.LINEAR,
         base_speed: float = 800.0,   # 基础速度 (像素/秒)，摇杆推满时
+        speed_boost: float = 2.0,    # 按住加速倍率
     ):
         self.sensitivity = sensitivity
         self.scroll_sensitivity = scroll_sensitivity
         self.curve = curve
         self.base_speed = base_speed
+        self.speed_boost = speed_boost
+        self._speed_boost_active = False
         self._controller = Controller()
         self._scroll_accum_x = 0.0
         self._scroll_accum_y = 0.0
@@ -63,6 +66,8 @@ class MouseSimulator:
             return
 
         speed = self._apply_curve(magnitude) * self.base_speed * self.sensitivity
+        if self._speed_boost_active:
+            speed *= self.speed_boost
         dx = stick_x / magnitude * speed * dt
         dy = stick_y / magnitude * speed * dt
 
@@ -121,6 +126,12 @@ class MouseSimulator:
             self._controller.scroll(ix, iy)
             self._scroll_accum_x -= ix
             self._scroll_accum_y -= iy
+
+    # --- 速度加速 ---
+
+    def set_speed_boost(self, active: bool):
+        """启用/禁用光标加速（按住 RT 时加速）。"""
+        self._speed_boost_active = active
 
     # --- 内部 ---
 
