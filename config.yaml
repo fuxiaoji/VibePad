@@ -1,5 +1,5 @@
 global:
-  mouse_sensitivity: 1.0
+  mouse_sensitivity: 1.4
   scroll_sensitivity: 1.0
   deadzone: 0.15
   cursor_speed_curve: linear
@@ -8,12 +8,32 @@ global:
 modes:
   mouse:
     switch_button: SELECT
+    layers:
+      vibe:
+        hold_button: LB
+        mappings:
+          A: key.tab
+          B: key.escape
+          X: key.ctrl+enter
+          Y: key.ctrl+shift+enter
+          DPAD_UP: key.up
+          DPAD_DOWN: key.down
+          DPAD_LEFT: key.alt+[
+          DPAD_RIGHT: key.alt+]
+          LB: key.ctrl+c
+          RB: key.ctrl+v
+          LT: key.ctrl+z
+          RT: key.ctrl+shift+z
+          START: key.ctrl+s
+          SELECT: null
+          LEFT_STICK: key.ctrl+p
+          RIGHT_STICK: key.ctrl+shift+p
     mappings:
       LEFT_STICK_X: mouse_x
       LEFT_STICK_Y: mouse_y
       RIGHT_STICK_X: scroll_x
       RIGHT_STICK_Y: scroll_y
-      A: mouse_left
+      A: mouse_drag
       B: mouse_right
       X: key.space
       Y: key.f
@@ -26,32 +46,9 @@ modes:
       LT: key.media_volume_down
       RT: mouse_speed_hold
       START: key.m
-      SELECT: switch_mode.vibe
-      LEFT_STICK: null
-      RIGHT_STICK: key.media_volume_up
-  vibe:
-    switch_button: SELECT
-    mappings:
-      LEFT_STICK_X: mouse_x
-      LEFT_STICK_Y: mouse_y
-      RIGHT_STICK_X: scroll_x
-      RIGHT_STICK_Y: scroll_y
-      A: key.tab
-      B: key.escape
-      X: key.ctrl+enter
-      Y: key.ctrl+shift+enter
-      DPAD_UP: key.up
-      DPAD_DOWN: key.down
-      DPAD_LEFT: key.alt+[
-      DPAD_RIGHT: key.alt+]
-      LB: key.ctrl+c
-      RB: key.ctrl+v
-      LT: key.ctrl+z
-      RT: key.ctrl+shift+z
-      START: key.ctrl+s
       SELECT: switch_mode.vim
-      LEFT_STICK: key.ctrl+p
-      RIGHT_STICK: key.ctrl+shift+p
+      LEFT_STICK: voice_input
+      RIGHT_STICK: mouse_open_keyboard
   vim:
     switch_button: SELECT
     mappings:
@@ -72,6 +69,6 @@ modes:
       START: nav.enter
       SELECT: switch_mode.mouse
       LEFT_STICK: nav.refresh
-      RIGHT_STICK: nav.task_view
+      RIGHT_STICK: nav.open_keyboard
       RIGHT_STICK_X: scroll_x
       RIGHT_STICK_Y: scroll_y

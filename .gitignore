@@ -29,3 +29,16 @@ Thumbs.db
 
 # Project specific
 *.log
+
+# PyInstaller
+dist/
+build/
+*.spec
+*.spec.bak
+
+# NSIS / Inno Setup
+*.nsi
+Output/
+
+# Release artifacts
+*.zip

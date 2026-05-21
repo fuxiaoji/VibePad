@@ -76,13 +76,24 @@ class MouseSimulator:
     # --- 点击 ---
 
     def click_left(self):
-        self._controller.click(Button.left, 1)
+        if not self._click_via_uia():
+            self._controller.click(Button.left, 1)
 
     def click_right(self):
-        self._controller.click(Button.right, 1)
+        if not self._click_via_uia():
+            self._controller.click(Button.right, 1)
 
     def click_middle(self):
-        self._controller.click(Button.middle, 1)
+        if not self._click_via_uia():
+            self._controller.click(Button.middle, 1)
+
+    def click_via_uia(self, debug: bool = False) -> bool:
+        """在光标位置通过 UIA 点击，绕过 UIPI 限制。
+
+        用于 OSK 等以 UIAccess 权限运行、拒绝 SendInput 的窗口。
+        Returns True 表示已通过 UIA 处理点击，False 表示应使用普通点击。
+        """
+        return self._click_via_uia(debug=debug)
 
     def press_left(self):
         self._controller.press(Button.left)
@@ -134,6 +145,69 @@ class MouseSimulator:
         self._speed_boost_active = active
 
     # --- 内部 ---
+
+    def _click_via_uia(self, debug: bool = False) -> bool:
+        """通过 UI Automation 在光标位置点击。
+
+        遍历祖先链检测是否属于 OSK 等高权限窗口，
+        如果是则用 UIA Click() 绕过 UIPI 限制。
+
+        Returns True 表示点击已被 UIA 处理。
+        """
+        try:
+            import ctypes.wintypes
+            _ole32 = ctypes.windll.ole32
+            _ole32.CoInitializeEx(None, 0x2)  # STA, 重复调用无害
+        except Exception:
+            pass
+        try:
+            import uiautomation as auto
+            x, y = self._controller.position
+            ctrl = auto.ControlFromPoint(x, y)
+            if ctrl is None:
+                if debug:
+                    print("[UIA] ControlFromPoint 返回 None")
+                return False
+
+            # 收集祖先链用于调试
+            chain_info: list[str] = []
+            ancestor = ctrl
+            target_ctrl = ctrl  # 最深层元素，用于最终点击
+            for i in range(20):
+                try:
+                    cn = getattr(ancestor, "ClassName", "") or ""
+                    name = ancestor.Name or ""
+                    ct = ancestor.ControlTypeName or ""
+                    chain_info.append(
+                        f"  [{i}] {ct} cls={cn} name=\"{name[:60]}\""
+                    )
+                    name_compact = name.replace(" ", "").replace("-", "")
+                    cn_lower = cn.lower()
+                    if any(kw in cn_lower or kw in name_compact.lower() for kw in [
+                        "osk", "tipband", "tipscreen",
+                        "onscreenkeyboard", "screenkeyboard",
+                        "屏幕键盘", "osk",
+                    ]):
+                        if debug:
+                            print("[UIA] ✓ OSK 检测成功，执行 UIA Click")
+                            for line in chain_info:
+                                print(line)
+                        ctrl.Click()
+                        return True
+                    ancestor = ancestor.GetParentControl()
+                    if ancestor is None:
+                        break
+                except Exception:
+                    break
+
+            if debug:
+                print(f"[UIA] ✗ 未检测到 OSK ({len(chain_info)} 层祖先):")
+                for line in chain_info:
+                    print(line)
+        except Exception as e:
+            if debug:
+                print(f"[UIA] 异常: {e}")
+        return False
 
     def _apply_curve(self, magnitude: float) -> float:
         """对摇杆幅值施加速度曲线。"""

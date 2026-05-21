@@ -466,22 +466,97 @@ class _GamepadBackendPygame:
 class _GamepadBackendHID:
     """hidapi 后端 — 底层 HID 读取，解析 Xbox 格式报告。"""
 
-    @staticmethod
-    def _find_device():
+    # 设备名中如果包含这些关键词，则跳过（不是手柄）
+    _NON_GAMEPAD_KEYWORDS = [
+        "keyboard", "键盘", "mouse", "鼠标",
+        "trackpad", "touchpad", "触控板",
+        "audio", "headset", "耳机", "speaker",
+        "hub", "集线器", "dock",
+        "fingerprint", "指纹",
+        "vgn",  # VGN 机械键盘品牌
+        "g3m",  # G3M 游戏鼠标
+        "hid i2c", "hidI2C",  # I2C HID 设备（触摸板/触摸屏）
+        "multitouch", "multitouch",  # 多点触控
+    ]
+
+    # 设备名中应包含这些关键词之一才算手柄
+    _GAMEPAD_KEYWORDS = [
+        "gamepad", "controller", "手柄", "joystick", "摇杆",
+        "xbox", "playstation", "dualshock", "dualsense",
+        "nintendo", "switch", "pro controller",
+        "8bitdo", "gamesir", "game sir", "盖世小鸡",
+        "betop", "北通", "flydigi", "飞智",
+        "powera", "pdp", "razer", "thrustmaster",
+        "mad catz", "hori", "steam controller",
+        "ds4", "ds5", "wireless controller",
+    ]
+
+    # 最近连接失败过的设备路径（避免死循环重连）
+    _failed_devices: dict[str, float] = {}
+    _FAIL_COOLDOWN = 5.0  # 失败后 5 秒内不再尝试同一设备
+
+    @classmethod
+    def _is_gamepad_device(cls, name: str) -> bool:
+        """检查设备名是否像是游戏手柄。"""
+        name_lower = name.lower()
+        # 先检查黑名单
+        for kw in cls._NON_GAMEPAD_KEYWORDS:
+            if kw in name_lower:
+                return False
+        # 再检查白名单
+        for kw in cls._GAMEPAD_KEYWORDS:
+            if kw in name_lower:
+                return True
+        # 都不匹配时，看设备名长度和内容
+        if "controller" in name_lower:
+            return True
+        return len(name) > 0
+
+    @classmethod
+    def _find_device(cls):
         import hid
+        now = time.monotonic()
+        # 清理过期的失败记录
+        expired = [p for p, t in cls._failed_devices.items() if now - t > cls._FAIL_COOLDOWN]
+        for p in expired:
+            del cls._failed_devices[p]
+
+        gamepad_candidates = 0
+        skipped = 0
         for d in hid.enumerate():
             name = d.get("product_string", "")
             usage_page = d.get("usage_page", 0)
             usage = d.get("usage", 0)
-            if usage_page == 0x01 and usage in (0x04, 0x05, 0x06, 0x08):
-                try:
-                    dev = hid.device()
-                    dev.open_path(d["path"])
-                    dev.set_nonblocking(False)
-                    print(f"手柄已连接 (hidapi): {name} (VID:{hex(d['vendor_id'])}, PID:{hex(d['product_id'])})")
-                    return dev
-                except Exception as e:
-                    print(f"无法打开设备 {name}: {e}")
+            path = d.get("path", "")
+
+            if not (usage_page == 0x01 and usage in (0x04, 0x05, 0x06, 0x08)):
+                continue
+
+            gamepad_candidates += 1
+
+            # 检查是否是非手柄设备
+            if not cls._is_gamepad_device(name):
+                skipped += 1
+                continue
+
+            # 检查失败冷却
+            if path in cls._failed_devices:
+                continue
+
+            try:
+                dev = hid.device()
+                dev.open_path(path)
+                dev.set_nonblocking(False)
+                print(f"手柄已连接 (hidapi): {name} (VID:{hex(d['vendor_id'])}, PID:{hex(d['product_id'])})")
+                # 连接成功后清除失败记录
+                cls._failed_devices.pop(path, None)
+                return dev
+            except Exception as e:
+                cls._failed_devices[path] = now
+
+        if gamepad_candidates > 0:
+            print(f"[hidapi] 扫描 {gamepad_candidates} 个手柄候选设备，"
+                  f"过滤 {skipped} 个非手柄，0 个成功连接")
         return None
 
     @classmethod
@@ -499,12 +574,18 @@ class _GamepadBackendHID:
         self._listener = listener
         self._device = device
         self._parser = XboxReportParser()
+        self._path = ""
 
     def read(self) -> dict:
         import hid
-        data = self._device.read(64, timeout_ms=100)
-        if data and len(data) >= 14:
-            return self._parser.parse(bytes(data))
+        try:
+            data = self._device.read(64, timeout_ms=100)
+            if data and len(data) >= 14:
+                return self._parser.parse(bytes(data))
+        except (ValueError, OSError) as e:
+            if self._path:
+                _GamepadBackendHID._failed_devices[self._path] = time.monotonic()
+            raise
         return {}
 
     def close(self):
@@ -580,6 +661,30 @@ class _GamepadListener:
             pygame.quit()
         except Exception:
             pass
+
+    def reconnect(self):
+        """强制断开当前后端并重新扫描手柄。"""
+        print("[controller] 强制重新扫描手柄...")
+        # 先断开当前后端
+        if self._backend:
+            try:
+                self._backend.close()
+            except Exception:
+                pass
+            self._backend = None
+        # 重新初始化 pygame（可能之前初始化失败）
+        try:
+            import pygame
+            pygame.init()
+            pygame.display.set_mode((1, 1), pygame.HIDDEN)
+        except Exception:
+            pass
+        # 如果线程没在运行，重新启动
+        if not self._running or (self._thread and not self._thread.is_alive()):
+            self._running = True
+            self._thread = threading.Thread(target=self._loop, daemon=True, name="gamepad")
+            self._thread.start()
+            print("[controller] 手柄扫描线程已启动")
 
     @property
     def state(self) -> GamepadState:
@@ -676,6 +781,8 @@ class _GamepadListener:
         return False
 
     def _loop(self):
+        # 初始扫描 — 带退避，减少无手柄时的日志噪音
+        scan_interval = 1.0
         while self._running and self._backend is None:
             # 1) XInput: Windows 原生, 对 Xbox 手柄最可靠
             if self._try_backend(_GamepadBackendXInput):
@@ -694,7 +801,8 @@ class _GamepadListener:
                 pass
             if self._try_backend(_GamepadBackendHID):
                 break
-            time.sleep(1.0)
+            time.sleep(scan_interval)
+            scan_interval = min(scan_interval * 1.5, 8.0)  # 退避，最多 8 秒
 
         if self._backend is None:
             self._running = False
@@ -710,8 +818,10 @@ class _GamepadListener:
                 self._backend = None
                 for cb in self._on_disconnect:
                     cb()
+                # 重连 — 同样带退避
+                retry_interval = 0.5
                 while self._running:
-                    time.sleep(0.5)
+                    time.sleep(retry_interval)
                     if self._try_backend(_GamepadBackendXInput):
                         break
                     if self._try_backend(_GamepadBackendSDL2):
@@ -725,6 +835,7 @@ class _GamepadListener:
                         pass
                     if self._try_backend(_GamepadBackendHID):
                         break
+                    retry_interval = min(retry_interval * 1.5, 8.0)
             except Exception:
                 time.sleep(0.01)
 
@@ -765,3 +876,31 @@ def find_controllers() -> list[str]:
         except Exception:
             pass
     return found
+
+
+def enumerate_hid_devices() -> list[dict]:
+    """枚举所有 HID 设备（调试用），打印设备列表帮助排查手柄识别问题。"""
+    devices = []
+    try:
+        import hid
+        print("[hidapi] === 枚举所有 HID 设备 ===")
+        for d in hid.enumerate():
+            name = d.get("product_string", "")
+            usage_page = d.get("usage_page", 0)
+            usage = d.get("usage", 0)
+            vid = d.get("vendor_id", 0)
+            pid = d.get("product_id", 0)
+            is_gamepad_usage = (usage_page == 0x01 and usage in (0x04, 0x05, 0x06, 0x08))
+            marker = "← 手柄候选" if is_gamepad_usage else ""
+            print(f"  [{hex(usage_page)}/{hex(usage)}] {name} "
+                  f"(VID:{hex(vid)} PID:{hex(pid)}) {marker}")
+            devices.append({
+                "name": name, "usage_page": usage_page, "usage": usage,
+                "vid": vid, "pid": pid, "is_gamepad_candidate": is_gamepad_usage,
+            })
+        print(f"[hidapi] 共 {len(devices)} 个设备，{sum(1 for d in devices if d['is_gamepad_candidate'])} 个手柄候选")
+    except ImportError:
+        print("[hidapi] hidapi 未安装")
+    except Exception as e:
+        print(f"[hidapi] 枚举失败: {e}")
+    return devices

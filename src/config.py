@@ -23,10 +23,21 @@ class GlobalConfig:
 
 
 @dataclass
+class LayerConfig:
+    name: str = ""
+    hold_button: str = ""
+    mappings: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class ModeConfig:
     name: str
     switch_button: str = ""
     mappings: dict[str, str] = field(default_factory=dict)
+    layers: dict[str, LayerConfig] = field(default_factory=dict)
+
+    def get_layer(self, name: str) -> Optional[LayerConfig]:
+        return self.layers.get(name)
 
 
 @dataclass
@@ -66,10 +77,18 @@ def load_config(path: Union[str, Path] = "config.yaml") -> AppConfig:
 
     modes = {}
     for name, m in raw.get("modes", {}).items():
+        layers = {}
+        for lname, l in m.get("layers", {}).items():
+            layers[lname] = LayerConfig(
+                name=lname,
+                hold_button=l.get("hold_button", ""),
+                mappings=l.get("mappings", {}),
+            )
         modes[name] = ModeConfig(
             name=name,
             switch_button=m.get("switch_button", ""),
             mappings=m.get("mappings", {}),
+            layers=layers,
         )
 
     return AppConfig(global_=global_cfg, modes=modes)
@@ -90,6 +109,15 @@ def save_config(config: AppConfig, path: Union[str, Path] = "config.yaml"):
             name: {
                 "switch_button": mc.switch_button,
                 "mappings": dict(mc.mappings),
+                **({
+                    "layers": {
+                        lname: {
+                            "hold_button": lc.hold_button,
+                            "mappings": dict(lc.mappings),
+                        }
+                        for lname, lc in mc.layers.items()
+                    }
+                } if mc.layers else {}),
             }
             for name, mc in config.modes.items()
         },

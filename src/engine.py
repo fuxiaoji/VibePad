@@ -24,6 +24,7 @@ class ActionType(Enum):
     KEY = auto()        # 键盘相关（单键、组合键）
     SWITCH = auto()     # 模式切换
     NAVIGATE = auto()   # UI 焦点导航（vim 模式）
+    VOICE = auto()      # 语音输入
     NONE = auto()       # 无映射
 
 
@@ -45,6 +46,8 @@ def classify_action(mapping_value: str) -> tuple[ActionType, str]:
         return (ActionType.MOUSE, mapping_value)
     if mapping_value.startswith("nav."):
         return (ActionType.NAVIGATE, mapping_value[4:])
+    if mapping_value == "voice_input":
+        return (ActionType.VOICE, "")
     return (ActionType.NONE, "")
 
 
@@ -92,6 +95,12 @@ class ModeEngine:
         self._rt_sticky_frames = 0     # 粘性释放计数器（防止 raw 抖动导致闪烁）
         self._dbg_frame = 0  # 调试用帧计数
 
+        # 层切换状态（子模式：按住按钮切换键层，类似 Shift）
+        self._layer_active: str = ""
+        self._layer_hold_btn: Button | None = None
+        self._layer_hold_start: float = 0.0
+        self._layer_threshold = 0.4  # 层切换长按阈值（秒）
+
         # 左摇杆焦点导航状态（vim 模式）
         self._stick_nav_cooldown = 0.0
         self._stick_nav_dir = (0, 0)
@@ -109,6 +118,8 @@ class ModeEngine:
     def stop(self):
         """停止引擎，释放所有按键。"""
         self.keys.release_all()
+        self._layer_active = ""
+        self._layer_hold_btn = None
         if self.navigator.active:
             self.navigator.stop()
 
@@ -119,6 +130,16 @@ class ModeEngine:
         self._last_tick = now
         if dt <= 0:
             return
+
+        # --- 层长按激活检测 ---
+        if self._layer_hold_btn is not None and not self._layer_active:
+            if now - self._layer_hold_start >= self._layer_threshold:
+                mode = self.config.get_mode(self._current_mode)
+                if mode:
+                    layer_name = self._find_layer_hold(mode, self._layer_hold_btn)
+                    if layer_name:
+                        self._layer_active = layer_name
+                        print(f"[layer] {layer_name} 子层激活 (hold {self._layer_hold_btn.name})")
 
         state = self.listener.state
         mode = self.config.get_mode(self._current_mode)
@@ -141,9 +162,9 @@ class ModeEngine:
 
         rt_active = self._rt_sticky_frames < 8
 
-        # 调试：每秒输出一次
+        # 调试：每10秒输出一次
         self._dbg_frame += 1
-        if self._dbg_frame % 60 == 1:
+        if self._dbg_frame % 600 == 1:
             print(f"[RT debug] raw={raw_rt:.3f} smoothed={self._rt_smoothed:.3f} "
                   f"sticky={self._rt_sticky_frames} active={rt_active} "
                   f"boost={self.mouse._speed_boost_active} mode={self._current_mode}")
@@ -185,10 +206,12 @@ class ModeEngine:
         scroll_x_action = mappings.get("RIGHT_STICK_X", "")
         scroll_y_action = mappings.get("RIGHT_STICK_Y", "")
         if scroll_x_action == "scroll_x" or scroll_y_action == "scroll_y":
-            self.mouse.scroll(
-                state.right_stick.x * dt * 10.0 if scroll_x_action == "scroll_x" else 0.0,
-                -state.right_stick.y * dt * 10.0 if scroll_y_action == "scroll_y" else 0.0,
-            )
+            sx = state.right_stick.x if scroll_x_action == "scroll_x" else 0.0
+            sy = state.right_stick.y if scroll_y_action == "scroll_y" else 0.0
+            if self._current_mode == "vim" and self.navigator.active:
+                self.navigator.scroll_stick(sx, -sy, dt)
+            else:
+                self.mouse.scroll(sx * dt * 10.0, -sy * dt * 10.0)
 
         # --- 十字键→离散滚轮 ---
         dpad_x, dpad_y = state.dpad
@@ -200,51 +223,99 @@ class ModeEngine:
     # --- 按钮处理 ---
 
     def _on_button(self, btn: Button, pressed: bool):
-        """手柄按钮回调。"""
+        """手柄按钮回调 — 层感知版。"""
         now = time.monotonic()
         mode = self.config.get_mode(self._current_mode)
         if mode is None:
             return
 
-        mapping_value = mode.mappings.get(btn.name, "")
-        action_type, param = classify_action(mapping_value)
+        if pressed:
+            # 检查是否是层触发按钮（长按进入子模式）
+            layer_name = self._find_layer_hold(mode, btn)
+            if layer_name:
+                self._layer_hold_btn = btn
+                self._layer_hold_start = now
+                return  # 不立即执行动作，等释放或长按判定
+
+        if not pressed and self._layer_hold_btn == btn:
+            # 层触发按钮释放
+            hold_duration = now - self._layer_hold_start
+            self._layer_hold_btn = None
+
+            if hold_duration < self._layer_threshold:
+                # 短按：执行基础映射
+                mapping_value = mode.mappings.get(btn.name, "")
+                atype, param = classify_action(mapping_value)
+                self._execute_action(btn, atype, param, now, True)
+                self._execute_action(btn, atype, param, now, False)
+                self._prev_buttons[btn] = False
+            # 退出激活层
+            if self._layer_active:
+                self._layer_active = ""
+            return
+
+        # 查找有效映射（层优先）
+        mapping_value = self._get_effective_mapping(mode, btn)
+        atype, param = classify_action(mapping_value)
 
         if pressed:
-            self._handle_press(btn, action_type, param, now)
+            self._execute_action(btn, atype, param, now, True)
         else:
-            self._handle_release(btn, action_type, param, now)
+            self._execute_action(btn, atype, param, now, False)
 
         self._prev_buttons[btn] = pressed
 
-    def _handle_press(self, btn: Button, action_type: ActionType, param: str, now: float):
-        if action_type == ActionType.MOUSE:
-            self._mouse_action(param, True)
-        elif action_type == ActionType.KEY:
-            self.keys.press(param)
-        elif action_type == ActionType.SWITCH:
-            self._switch_hold_start[btn] = now
-            self._switch_was_pressed.add(btn)
-        elif action_type == ActionType.NAVIGATE:
-            if param == "speed_hold":
-                self.navigator.speed_start()
+    def _execute_action(self, btn: Button, atype: ActionType, param: str, now: float, pressed: bool):
+        """统一动作分发。"""
+        if atype == ActionType.MOUSE:
+            self._mouse_action(param, pressed)
+        elif atype == ActionType.KEY:
+            if pressed:
+                self.keys.press(param)
             else:
-                self._nav_action(param)
+                self.keys.release(param)
+        elif atype == ActionType.SWITCH:
+            if pressed:
+                self._switch_hold_start[btn] = now
+                self._switch_was_pressed.add(btn)
+            else:
+                if btn in self._switch_hold_start:
+                    hold_duration = now - self._switch_hold_start.pop(btn)
+                    self._switch_was_pressed.discard(btn)
+                    if hold_duration < self._hold_threshold:
+                        self._switch_mode(param)
+        elif atype == ActionType.VOICE:
+            if pressed:
+                self.keys.tap("key.win+h")  # Windows 内置语音听写
+        elif atype == ActionType.NAVIGATE:
+            if pressed:
+                if param == "speed_hold":
+                    self.navigator.speed_start()
+                else:
+                    self._nav_action(param)
+            else:
+                if param == "speed_hold":
+                    self.navigator.speed_end()
 
-    def _handle_release(self, btn: Button, action_type: ActionType, param: str, now: float):
-        if action_type == ActionType.MOUSE:
-            self._mouse_action(param, False)
-        elif action_type == ActionType.KEY:
-            self.keys.release(param)
-        elif action_type == ActionType.SWITCH:
-            if btn in self._switch_hold_start:
-                hold_duration = now - self._switch_hold_start.pop(btn)
-                self._switch_was_pressed.discard(btn)
-                if hold_duration < self._hold_threshold:
-                    # 短按 → 切换模式
-                    self._switch_mode(param)
-        elif action_type == ActionType.NAVIGATE:
-            if param == "speed_hold":
-                self.navigator.speed_end()
+    # --- 层查询 ---
+
+    @staticmethod
+    def _find_layer_hold(mode: ModeConfig, btn: Button) -> str:
+        """返回 btn 触发的层名，如果不是层触发按钮返回空字符串。"""
+        for lname, layer in mode.layers.items():
+            if layer.hold_button == btn.name:
+                return lname
+        return ""
+
+    def _get_effective_mapping(self, mode: ModeConfig, btn: Button) -> str:
+        """获取按钮的有效映射（优先查激活层，回退到基础映射）。"""
+        if self._layer_active:
+            layer = mode.get_layer(self._layer_active)
+            if layer:
+                val = layer.mappings.get(btn.name, "")
+                if val and val != "null":
+                    return val
+        return mode.mappings.get(btn.name, "")
 
     def _switch_mode(self, target_mode: str):
         """切换到目标模式。"""
@@ -292,6 +363,7 @@ class ModeEngine:
             "refresh": nav.refresh,
             "task_view": nav.task_view,
             "switch_input": nav.switch_input,
+            "open_keyboard": nav.open_keyboard,
         }
         fn = dispatch.get(action)
         if fn:
@@ -370,10 +442,13 @@ class ModeEngine:
 
     @staticmethod
     def _mode_has_nav(mode: ModeConfig | None) -> bool:
-        """检查模式中是否有导航动作映射。"""
+        """检查模式中是否有导航动作映射（含层）。"""
         if mode is None:
             return False
-        return any((v or "").startswith("nav.") for v in mode.mappings.values())
+        all_mappings = list(mode.mappings.values())
+        for layer in mode.layers.values():
+            all_mappings.extend(layer.mappings.values())
+        return any((v or "").startswith("nav.") for v in all_mappings)
 
     def _mouse_action(self, action: str, pressed: bool):
         """执行鼠标动作。"""
@@ -386,6 +461,14 @@ class ModeEngine:
         elif action == "middle":
             if pressed:
                 self.mouse.click_middle()
+        elif action == "drag":
+            if pressed:
+                self.mouse.drag_start()
+            else:
+                self.mouse.drag_end()
+        elif action == "open_keyboard":
+            if pressed:
+                self.keys.tap("key.win+ctrl+o")  # Windows 内置虚拟键盘
         elif action == "speed_hold":
             self.mouse.set_speed_boost(pressed)
         elif action == "x":

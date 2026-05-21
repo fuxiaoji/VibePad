@@ -62,9 +62,11 @@ _MODIFIERS = {
     "alt": Key.alt,
     "option": Key.alt,
     "shift": Key.shift,
+    "win": Key.cmd,  # Windows 徽标键（始终为 Win，不会被重映射为 Ctrl）
 }
 
 # 非 macOS 平台上将 cmd/command 映射到 ctrl
+# win 不受影响 — 它始终是 Windows 徽标键
 if sys.platform != "darwin":
     _MODIFIERS["cmd"] = Key.ctrl
     _MODIFIERS["command"] = Key.ctrl

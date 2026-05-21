@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import math
 import os
 import sys
@@ -53,17 +54,24 @@ from src.engine import ModeEngine, classify_action, ActionType
 
 # 自动选择后端：优先真手柄，不可用则键盘模拟
 _using_mock = False
-try:
-    from src.controller import GamepadListener, find_controllers
-    ctrls = find_controllers()
-    if ctrls:
-        print(f"使用物理手柄: {ctrls[0]}")
-    else:
-        raise RuntimeError("未找到物理手柄")
-except Exception:
+_force_mock = "--mock" in sys.argv
+if _force_mock:
     from src.controller_mock import GamepadListener, find_controllers
     _using_mock = True
-    print("使用键盘模拟手柄 (WASD=左摇杆 IJKL=右摇杆 Space=A Tab=SELECT)")
+    print("强制使用键盘模拟手柄 (WASD=左摇杆 IJKL=右摇杆 Space=A Tab=SELECT)")
+else:
+    try:
+        from src.controller import GamepadListener, find_controllers, enumerate_hid_devices
+        ctrls = find_controllers()
+        if ctrls:
+            print(f"使用物理手柄: {ctrls[0]}")
+        else:
+            print("未检测到手柄 — 使用物理监听器（插上手柄后自动识别）")
+        enumerate_hid_devices()
+    except ImportError:
+        from src.controller_mock import GamepadListener, find_controllers
+        _using_mock = True
+        print("使用键盘模拟手柄 (WASD=左摇杆 IJKL=右摇杆 Space=A Tab=SELECT)")
 
 
 # ─── 颜色常量 ───
@@ -81,8 +89,11 @@ TRIGGER_FILL = QColor(80, 180, 120)
 DPAD_ACTIVE = QColor(255, 200, 60)
 MODE_COLORS = {
     "mouse": QColor(80, 160, 255),
-    "vibe": QColor(200, 120, 255),
+    "vibe": QColor(200, 120, 255),  # vibe 现在是 mouse 的子层
     "vim": QColor(80, 255, 160),
+}
+LAYER_COLORS = {
+    "vibe": QColor(200, 120, 255),
 }
 
 # ─── 可映射的手柄输入列表 ───
@@ -117,6 +128,7 @@ MOUSE_ACTIONS = {
     "left": "鼠标左键",
     "right": "鼠标右键",
     "middle": "鼠标中键",
+    "drag": "长按拖拽/短按点击",
     "x": "鼠标水平移动",
     "y": "鼠标垂直移动",
     "scroll_up": "滚轮上滚",
@@ -149,6 +161,7 @@ NAV_ACTIONS = {
     "speed_hold": "按住倍速播放 (视频)",
     "task_view": "Win+Tab 任务视图",
     "switch_input": "切换输入语言 (Win+Space)",
+    "open_keyboard": "打开系统虚拟键盘",
 }
 
 
@@ -355,7 +368,7 @@ class BindingEditorDialog(QDialog):
         type_layout.addWidget(type_lbl)
 
         self._type_combo = QComboBox()
-        self._type_combo.addItems(["null", "mouse", "key", "switch_mode", "nav"])
+        self._type_combo.addItems(["null", "mouse", "key", "switch_mode", "nav", "voice"])
         self._type_combo.setStyleSheet(self._combo_style())
         type_layout.addWidget(self._type_combo, 1)
         layout.addLayout(type_layout)
@@ -463,6 +476,8 @@ class BindingEditorDialog(QDialog):
             idx = self._nav_combo.findText(param)
             if idx >= 0:
                 self._nav_combo.setCurrentIndex(idx)
+        elif action_type == ActionType.VOICE:
+            self._type_combo.setCurrentText("voice")
         else:
             self._type_combo.setCurrentText("null")
 
@@ -515,6 +530,7 @@ class BindingEditorDialog(QDialog):
         self._key_group.setVisible(t == "key")
         self._switch_group.setVisible(t == "switch_mode")
         self._nav_group.setVisible(t == "nav")
+        # voice 类型无子选项
 
     def _on_type_changed(self, _text: str):
         self._update_visibility()
@@ -548,6 +564,8 @@ class BindingEditorDialog(QDialog):
             return f"switch_mode.{self._switch_combo.currentText()}"
         elif t == "nav":
             return f"nav.{self._nav_combo.currentText()}"
+        elif t == "voice":
+            return "voice_input"
         return "null"
 
     def _on_accept(self):
@@ -615,6 +633,21 @@ class DashboardTab(QWidget):
         self._connection_label.setStyleSheet(f"color: {ACCENT_PRESSED.name()};")
         top.addWidget(self._connection_label)
 
+        self._find_btn = QPushButton("🔍 查找手柄")
+        self._find_btn.setFont(QFont("Sans", 10))
+        self._find_btn.setFixedWidth(100)
+        self._find_btn.setFixedHeight(28)
+        self._find_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3a3a3a; color: #ddd; border: 1px solid #555;
+                border-radius: 4px; padding: 4px 8px;
+            }
+            QPushButton:hover { background-color: #4a4a4a; border-color: #77a; }
+            QPushButton:pressed { background-color: #555; }
+        """)
+        self._find_btn.clicked.connect(self._on_find_controller)
+        top.addWidget(self._find_btn)
+
         top.addStretch()
 
         mode_layout = QVBoxLayout()
@@ -628,6 +661,11 @@ class DashboardTab(QWidget):
         self._mode_label.setStyleSheet(f"color: {MODE_COLORS['mouse'].name()};")
         self._mode_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         mode_layout.addWidget(self._mode_label)
+        self._layer_label = QLabel("")
+        self._layer_label.setFont(QFont("Sans", 9))
+        self._layer_label.setStyleSheet(f"color: {QColor(200, 120, 255).name()};")
+        self._layer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mode_layout.addWidget(self._layer_label)
         top.addLayout(mode_layout)
 
         top.addStretch()
@@ -820,6 +858,28 @@ class DashboardTab(QWidget):
         self._boost_value_label.setText(f"{boost:.1f}x")
         save_config(self._config, self._config_path)
 
+    def _on_find_controller(self):
+        """查找手柄按钮回调 — 强制重新扫描。"""
+        self._log_fn("正在查找手柄...")
+        self._connection_label.setText("扫描中...")
+        self._connection_label.setStyleSheet(f"color: {TEXT_SECONDARY.name()}; font-weight: bold;")
+        # 枚举所有HID设备（调试）
+        enumerate_hid_devices()
+        # 如果使用的是物理监听器，调用 reconnect
+        if not self._mock and hasattr(self._listener, 'reconnect'):
+            self._listener.reconnect()
+        # 立即触发一次检测
+        controllers = find_controllers()
+        if controllers:
+            self._connected = True
+            self._connection_label.setText(f"已连接: {controllers[0]}")
+            self._connection_label.setStyleSheet(f"color: {TRIGGER_FILL.name()}; font-weight: bold;")
+            self._log_fn(f"找到手柄: {controllers[0]}")
+        else:
+            self._connection_label.setText("未找到手柄 — 请检查连接")
+            self._connection_label.setStyleSheet(f"color: {ACCENT_PRESSED.name()}; font-weight: bold;")
+            self._log_fn("未找到手柄")
+
     def tick(self, now: float):
         self._frame_count += 1
         if now - self._fps_timer >= 1.0:
@@ -848,8 +908,7 @@ class DashboardTab(QWidget):
                     self._connection_label.setStyleSheet(f"color: {ACCENT_PRESSED.name()}; font-weight: bold;")
                     self._log_fn("手柄已断开")
 
-            if not self._connected:
-                return
+            # 不 return — 监听器后台线程持续重试，插上手柄后自动识别
 
         state = self._listener.state
 
@@ -882,6 +941,16 @@ class DashboardTab(QWidget):
         self._mode_label.setStyleSheet(
             f"color: {MODE_COLORS.get(mode, ACCENT).name()}; font-weight: bold;"
         )
+        # 子层状态
+        layer = getattr(self._engine, '_layer_active', '')
+        if layer:
+            self._layer_label.setText(f"子层: {layer}")
+            self._layer_label.setStyleSheet(
+                f"color: {LAYER_COLORS.get(layer, ACCENT).name()}; font-weight: bold;"
+            )
+        else:
+            self._layer_label.setText("")
+            self._layer_label.setStyleSheet("")
 
     def set_log(self, text: str):
         self._log_label.setText(text)
@@ -897,6 +966,7 @@ class BindingsTab(QWidget):
         self._config = config
         self._config_path = config_path
         self._current_mode = config.default_mode or "mouse"
+        self._current_layer = ""  # 空字符串 = 基础映射
 
         self.setStyleSheet(f"background: {BG_DARK.name()};")
         self._build_ui()
@@ -920,6 +990,16 @@ class BindingsTab(QWidget):
         self._mode_combo.setStyleSheet(self._combo_style())
         self._mode_combo.currentTextChanged.connect(self._on_mode_changed)
         toolbar.addWidget(self._mode_combo)
+
+        # 层选择器（只在当前模式有层时显示）
+        layer_lbl = QLabel("子层:")
+        layer_lbl.setStyleSheet(f"color: {TEXT_PRIMARY.name()}; font-size: 13px;")
+        toolbar.addWidget(layer_lbl)
+
+        self._layer_combo = QComboBox()
+        self._layer_combo.setStyleSheet(self._combo_style())
+        self._layer_combo.currentTextChanged.connect(self._on_layer_changed)
+        toolbar.addWidget(self._layer_combo)
 
         toolbar.addStretch()
 
@@ -956,7 +1036,23 @@ class BindingsTab(QWidget):
 
     def _refresh_table(self):
         mode = self._config.get_mode(self._current_mode)
-        mappings = mode.mappings if mode else {}
+        if mode is None:
+            return
+        # 根据是否选中子层选择映射来源
+        if self._current_layer:
+            layer = mode.get_layer(self._current_layer)
+            mappings = layer.mappings if layer else {}
+        else:
+            mappings = mode.mappings
+
+        # 更新层选择器
+        layer_names = ["(基础映射)"] + list(mode.layers.keys())
+        current_layer_display = f"({self._current_layer})" if self._current_layer else "(基础映射)"
+        self._layer_combo.blockSignals(True)
+        self._layer_combo.clear()
+        self._layer_combo.addItems(layer_names)
+        self._layer_combo.setCurrentText(current_layer_display)
+        self._layer_combo.blockSignals(False)
 
         for row, (input_id, input_display, category) in enumerate(CONTROLLER_INPUTS):
             action = mappings.get(input_id, "")
@@ -977,7 +1073,7 @@ class BindingsTab(QWidget):
             type_names = {
                 ActionType.MOUSE: "鼠标", ActionType.KEY: "键盘",
                 ActionType.SWITCH: "切换", ActionType.NAVIGATE: "导航",
-                ActionType.NONE: "无",
+                ActionType.VOICE: "语音", ActionType.NONE: "无",
             }
             type_item = QTableWidgetItem(type_names.get(at, "?"))
             type_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -992,7 +1088,13 @@ class BindingsTab(QWidget):
 
     def _edit_binding(self, row: int, input_id: str, input_display: str):
         mode = self._config.get_mode(self._current_mode)
-        current_action = mode.mappings.get(input_id, "") if mode else ""
+        if mode is None:
+            return
+        if self._current_layer:
+            layer = mode.get_layer(self._current_layer)
+            current_action = layer.mappings.get(input_id, "") if layer else ""
+        else:
+            current_action = mode.mappings.get(input_id, "")
 
         dialog = BindingEditorDialog(
             input_id, input_display, current_action,
@@ -1000,8 +1102,14 @@ class BindingsTab(QWidget):
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             new_action = dialog.get_action_string()
-            mode = self._config.get_mode(self._current_mode)
-            if mode:
+            if self._current_layer:
+                layer = mode.get_layer(self._current_layer)
+                if layer:
+                    if new_action == "null":
+                        layer.mappings.pop(input_id, None)
+                    else:
+                        layer.mappings[input_id] = new_action
+            else:
                 if new_action == "null":
                     mode.mappings.pop(input_id, None)
                 else:
@@ -1010,6 +1118,16 @@ class BindingsTab(QWidget):
 
     def _on_mode_changed(self, mode_name: str):
         self._current_mode = mode_name
+        self._current_layer = ""
+        self._refresh_table()
+
+    def _on_layer_changed(self, layer_display: str):
+        if layer_display.startswith("(") and layer_display.endswith(")"):
+            layer_display = layer_display[1:-1]
+        if layer_display == "基础映射":
+            self._current_layer = ""
+        else:
+            self._current_layer = layer_display
         self._refresh_table()
 
     def _save_config(self):
@@ -1047,6 +1165,169 @@ class BindingsTab(QWidget):
             "padding: 3px 10px; font-size: 12px; }}"
             f"QPushButton:hover {{ background: {ACCENT.name()}; color: white; }}"
         )
+
+
+# ─── 说明书标签页 ───
+
+class ManualTab(QWidget):
+    """使用说明书 — 包含模式对照表和操作指南。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        from PyQt6.QtWidgets import QTextBrowser
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        browser.setStyleSheet(f"""
+            QTextBrowser {{
+                background: {BG_DARK.name()};
+                color: {TEXT_PRIMARY.name()};
+                border: none;
+                font-size: 14px;
+                padding: 20px;
+            }}
+        """)
+        browser.setHtml(_MANUAL_HTML)
+        layout.addWidget(browser)
+
+
+_MANUAL_HTML = r"""
+<style>
+h1 { color: #50a0ff; font-size: 22px; margin-top: 20px; }
+h2 { color: #50c878; font-size: 18px; margin-top: 16px; }
+h3 { color: #c878ff; font-size: 15px; margin-top: 12px; }
+table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+th { background: #2a2a35; color: #50a0ff; padding: 8px 12px; text-align: left;
+     border: 1px solid #3a3a45; font-size: 13px; }
+td { padding: 6px 12px; border: 1px solid #3a3a45; font-size: 13px; }
+td.code { font-family: 'Consolas', 'Courier New', monospace; color: #e0c060; }
+td.desc { color: #c0c0d0; }
+code { background: #2a2a35; padding: 1px 5px; border-radius: 3px;
+       color: #e0c060; font-size: 13px; }
+.note { background: #1a2a1a; border-left: 3px solid #50c878; padding: 10px 14px;
+        margin: 10px 0; color: #90c090; font-size: 13px; }
+.warn { background: #2a1a1a; border-left: 3px solid #ff5050; padding: 10px 14px;
+        margin: 10px 0; color: #ff9090; font-size: 13px; }
+</style>
+
+<h1>手柄控制面板 — 使用说明书</h1>
+<p>本项目将游戏手柄映射为鼠标/键盘，支持三大操作层：<b>鼠标模式</b>、<b>Vibe 编码子层</b>、
+<b>Vim 焦点导航模式</b>。</p>
+
+<h2>模式切换</h2>
+<p>按 <code>SELECT</code> 短按在 <b>mouse</b> ↔ <b>vim</b> 之间切换。
+在 mouse 模式下 <b>长按 LB</b> 进入 vibe 编码子层，松开回到基础鼠标。</p>
+
+<h2>1. 鼠标模式 (mouse)</h2>
+<p>用左摇杆控制光标移动，右摇杆滚屏。适用于网页浏览、文件操作等日常场景。</p>
+
+<h3>基础层按键</h3>
+<table>
+<tr><th>手柄按键</th><th>功能</th><th>配置值</th></tr>
+<tr><td class="desc">左摇杆</td><td class="desc">移动光标</td><td class="code">mouse_x / mouse_y</td></tr>
+<tr><td class="desc">右摇杆</td><td class="desc">滚轮 (上下+水平)</td><td class="code">scroll_x / scroll_y</td></tr>
+<tr><td class="desc">A (短按=点击，长按=拖拽)</td><td class="desc">鼠标左键 拖拽/点击</td><td class="code">mouse_drag</td></tr>
+<tr><td class="desc">B</td><td class="desc">鼠标右键</td><td class="code">mouse_right</td></tr>
+<tr><td class="desc">X</td><td class="desc">空格键 (播放/暂停)</td><td class="code">key.space</td></tr>
+<tr><td class="desc">Y</td><td class="desc">F 键 (全屏)</td><td class="code">key.f</td></tr>
+<tr><td class="desc">十字键</td><td class="desc">方向键 ↑↓←→</td><td class="code">key.up/down/left/right</td></tr>
+<tr><td class="desc">LB (短按</td><td class="desc">Ctrl+Shift+Tab (上一标签页)</td><td class="code">key.ctrl+shift+tab</td></tr>
+<tr><td class="desc">RB</td><td class="desc">Ctrl+Tab (下一标签页)</td><td class="code">key.ctrl+tab</td></tr>
+<tr><td class="desc">LT</td><td class="desc">减小音量</td><td class="code">key.media_volume_down</td></tr>
+<tr><td class="desc">RT (按住)</td><td class="desc">光标加速 3.4×</td><td class="code">mouse_speed_hold</td></tr>
+<tr><td class="desc">START</td><td class="desc">M 键 (静音)</td><td class="code">key.m</td></tr>
+<tr><td class="desc">SELECT</td><td class="desc">切换到 vim 模式</td><td class="code">switch_mode.vim</td></tr>
+<tr><td class="desc">LEFT_STICK 按下</td><td class="desc">语音听写 (Win+H)</td><td class="code">voice_input</td></tr>
+<tr><td class="desc">RIGHT_STICK 按下</td><td class="desc">虚拟键盘 (Win+Ctrl+O)</td><td class="code">mouse_open_keyboard</td></tr>
+</table>
+
+<div class="note"><b>拖拽说明：</b>A 键短按=左键点击，按住不放=鼠标拖拽（配合左摇杆选中文字/拖放文件）。
+松手即为释放左键。</div>
+
+<h3>Vibe 编码子层 (长按 LB)</h3>
+<p>在鼠标模式下 <b>长按 LB (~0.4秒)</b> 进入 Vibe 编码层，按键映射临时切换为 IDE/AI 编码
+快捷键。松开 LB 回到基础鼠标模式。</p>
+<table>
+<tr><th>手柄按键</th><th>功能</th><th>配置值</th></tr>
+<tr><td class="desc">A</td><td class="desc">Tab (接受 AI 建议)</td><td class="code">key.tab</td></tr>
+<tr><td class="desc">B</td><td class="desc">Escape (关闭)</td><td class="code">key.escape</td></tr>
+<tr><td class="desc">X</td><td class="desc">Ctrl+Enter (提交给 AI)</td><td class="code">key.ctrl+enter</td></tr>
+<tr><td class="desc">Y</td><td class="desc">Ctrl+Shift+Enter (强制提交)</td><td class="code">key.ctrl+shift+enter</td></tr>
+<tr><td class="desc">十字键 ↑↓</td><td class="desc">上下移动</td><td class="code">key.up/down</td></tr>
+<tr><td class="desc">十字键 ←→</td><td class="desc">Alt+[/] (上/下一条 AI 建议)</td><td class="code">key.alt+[ / key.alt+]</td></tr>
+<tr><td class="desc">LB</td><td class="desc">Ctrl+C (复制)</td><td class="code">key.ctrl+c</td></tr>
+<tr><td class="desc">RB</td><td class="desc">Ctrl+V (粘贴)</td><td class="code">key.ctrl+v</td></tr>
+<tr><td class="desc">LT</td><td class="desc">Ctrl+Z (撤销)</td><td class="code">key.ctrl+z</td></tr>
+<tr><td class="desc">RT</td><td class="desc">Ctrl+Shift+Z (重做)</td><td class="code">key.ctrl+shift+z</td></tr>
+<tr><td class="desc">START</td><td class="desc">Ctrl+S (保存)</td><td class="code">key.ctrl+s</td></tr>
+<tr><td class="desc">LEFT_STICK 按下</td><td class="desc">Ctrl+P (快速打开文件)</td><td class="code">key.ctrl+p</td></tr>
+<tr><td class="desc">RIGHT_STICK 按下</td><td class="desc">Ctrl+Shift+P (命令面板)</td><td class="code">key.ctrl+shift+p</td></tr>
+</table>
+
+<h2>2. Vim 焦点导航模式 (vim)</h2>
+<p>通过 Windows UI Automation API 枚举屏幕上所有可交互元素，蓝色光环标识当前焦点。
+用十字键在元素间跳转，A 键点击。类似 Switch/Apple TV 的 UI 导航。</p>
+
+<h3>三级层级</h3>
+<table>
+<tr><th>层级</th><th>范围</th><th>进入方式</th><th>退出方式</th></tr>
+<tr><td class="desc">Level 1 窗口级</td><td class="desc">应用窗口 + 任务栏</td><td class="desc">切换到 vim 模式自动进入</td><td class="desc">—</td></tr>
+<tr><td class="desc">Level 2 元素级</td><td class="desc">窗口内可交互元素</td><td class="desc">在窗口上按 A</td><td class="desc">按 B 回到 Level 1</td></tr>
+<tr><td class="desc">Level 3 输入级</td><td class="desc">文本编辑状态</td><td class="desc">对输入框/编辑区按 A</td><td class="desc">按 B 回到 Level 2</td></tr>
+</table>
+
+<h3>按键映射</h3>
+<table>
+<tr><th>手柄按键</th><th>功能</th><th>配置值</th></tr>
+<tr><td class="desc">十字键</td><td class="desc">方向焦点导航</td><td class="code">nav.up/down/left/right</td></tr>
+<tr><td class="desc">A</td><td class="desc">点击/进入下一层</td><td class="code">nav.click</td></tr>
+<tr><td class="desc">B</td><td class="desc">返回上一层 / Esc</td><td class="code">nav.escape</td></tr>
+<tr><td class="desc">X</td><td class="desc">Tab 键</td><td class="code">nav.tab</td></tr>
+<tr><td class="desc">Y</td><td class="desc">右键点击</td><td class="code">nav.right_click</td></tr>
+<tr><td class="desc">LB</td><td class="desc">上一标签页 Ctrl+Shift+Tab</td><td class="code">nav.prev_tab</td></tr>
+<tr><td class="desc">RB</td><td class="desc">下一标签页 Ctrl+Tab</td><td class="code">nav.next_tab</td></tr>
+<tr><td class="desc">LT</td><td class="desc">向上滚动</td><td class="code">nav.scroll_up</td></tr>
+<tr><td class="desc">RT (按住)</td><td class="desc">视频倍速播放</td><td class="code">nav.speed_hold</td></tr>
+<tr><td class="desc">START</td><td class="desc">Enter 键</td><td class="code">nav.enter</td></tr>
+<tr><td class="desc">SELECT</td><td class="desc">切换回 mouse 模式</td><td class="code">switch_mode.mouse</td></tr>
+<tr><td class="desc">LEFT_STICK 按下</td><td class="desc">重新扫描 UI 元素</td><td class="code">nav.refresh</td></tr>
+<tr><td class="desc">RIGHT_STICK 按下</td><td class="desc">呼出虚拟键盘 osk.exe</td><td class="code">nav.open_keyboard</td></tr>
+<tr><td class="desc">右摇杆</td><td class="desc">页面滚轮</td><td class="code">scroll_x / scroll_y</td></tr>
+<tr><td class="desc">左摇杆</td><td class="desc">方向导航 (持续推动)</td><td class="code">内置引擎处理</td></tr>
+<tr><td class="desc">左摇杆 + LT</td><td class="desc">跳到目标方向最远</td><td class="code">内置引擎处理</td></tr>
+</table>
+
+<h3>Level 3 输入级说明</h3>
+<p>进入输入级后方向导航被锁定。此时：</p>
+<ul>
+<li><b>B</b> — 退出输入级，回到元素级</li>
+<li><b>START</b> — 切换输入语言 (Win+Space)</li>
+<li><b>RIGHT_STICK 按下</b> — 打开 Windows 虚拟键盘</li>
+</ul>
+
+<h2>3. 语音输入</h2>
+<p>按下左摇杆 <b>LEFT_STICK</b> 触发 <b>Win+H</b>（Windows 内置语音听写），
+直接说话即可输入文字到当前光标位置。</p>
+<div class="note"><b>提示：</b>Win+H 是 Windows 10/11 自带的离线语音识别，
+无需联网，中文英文混合识别。首次使用需在系统设置中开启在线语音识别。</div>
+
+<h2>4. 常见操作指南</h2>
+<table>
+<tr><th>场景</th><th>模式</th><th>操作</th></tr>
+<tr><td class="desc">浏览网页</td><td class="code">mouse</td><td class="desc">左摇杆=光标, A=点击, 右摇杆=滚屏, LT/RT=音量/加速</td></tr>
+<tr><td class="desc">选中文字</td><td class="code">mouse</td><td class="desc">左摇杆移光标到起点, 按住A, 左摇杆拖到终点, 松A</td></tr>
+<tr><td class="desc">拖放文件</td><td class="code">mouse</td><td class="desc">同理：A按住+移动+松A</td></tr>
+<tr><td class="desc">AI 编码</td><td class="code">mouse (长按LB)</td><td class="desc">X=提交, A=接受建议, B=拒绝, ←→=切换建议</td></tr>
+<tr><td class="desc">键盘输入文字</td><td class="code">vim</td><td class="desc">导航到输入框 → A 进入 → 按右摇杆呼出 OSK → 用光标点虚拟键盘</td></tr>
+<tr><td class="desc">切换标签页</td><td class="code">mouse</td><td class="desc">LB/RB = 上/下一个标签页</td></tr>
+<tr><td class="desc">视频全屏</td><td class="code">mouse</td><td class="desc">Y = F 键</td></tr>
+</table>
+"""
 
 
 # ─── 主窗口 ───
@@ -1091,9 +1372,11 @@ class MainWindow(QMainWindow):
             self._mock, self._log
         )
         self._bindings = BindingsTab(self._config, self._config_path)
+        self._manual = ManualTab()
 
         self._tabs.addTab(self._dashboard, "📊 仪表盘")
         self._tabs.addTab(self._bindings, "🎮 按键绑定")
+        self._tabs.addTab(self._manual, "📖 说明书")
 
         self.setCentralWidget(self._tabs)
 
@@ -1114,7 +1397,47 @@ class MainWindow(QMainWindow):
 
 # ─── 入口 ───
 
+def _is_admin() -> bool:
+    """检测当前进程是否以管理员权限运行。"""
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def _elevate_to_admin():
+    """以管理员权限重启当前脚本。
+
+    使用 ShellExecuteW + runas 谓词触发 UAC 提权。
+    提权后原进程退出。
+    """
+    import ctypes.wintypes
+    script = os.path.abspath(sys.argv[0])
+    cwd = os.path.abspath(os.getcwd())
+    params = " ".join(f'"{a}"' if " " in a else a for a in sys.argv[1:])
+    ret = ctypes.windll.shell32.ShellExecuteW(
+        None, "runas", sys.executable,
+        f'"{script}" {params}', cwd, 1  # SW_SHOWNORMAL
+    )
+    # ret > 32 表示成功
+    if ret > 32:
+        sys.exit(0)
+    else:
+        print(f"[!] 提权失败 (ShellExecuteW 返回 {ret})，继续以普通权限运行")
+
+
 def main():
+    # 管理员权限检测 — OSK 屏幕键盘需要管理员权限才能交互
+    if not _is_admin():
+        print("=" * 56)
+        print("[!] 未以管理员身份运行！")
+        print("[!] 屏幕键盘 (OSK) 点击将无法使用。")
+        print("[!] 正在尝试提权重启...")
+        print("=" * 56)
+        _elevate_to_admin()
+        # 如果还在这里，说明用户拒绝了 UAC 或提权失败
+        print("[!] 已取消提权，OSK 屏幕键盘点击将不可用")
+
     parser_args = sys.argv[1:]
     config_path = "config.yaml"
     if "--config" in parser_args:
@@ -1127,6 +1450,17 @@ def main():
         alt_path = os.path.join(script_dir, "config.yaml")
         if os.path.exists(alt_path):
             config_path = alt_path
+        else:
+            # PyInstaller one-file 模式：从 _MEIPASS 提取默认配置
+            meipass = getattr(sys, "_MEIPASS", "")
+            if meipass:
+                bundled = os.path.join(meipass, "config.yaml")
+                if os.path.exists(bundled):
+                    # 复制到 exe 所在目录以便用户编辑
+                    import shutil
+                    exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+                    shutil.copy2(bundled, os.path.join(exe_dir, "config.yaml"))
+                    config_path = os.path.join(exe_dir, "config.yaml")
 
     print(f"加载配置: {config_path}")
     config = load_config(config_path)
