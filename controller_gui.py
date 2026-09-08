@@ -1415,9 +1415,11 @@ def _elevate_to_admin():
     script = os.path.abspath(sys.argv[0])
     cwd = os.path.abspath(os.getcwd())
     params = " ".join(f'"{a}"' if " " in a else a for a in sys.argv[1:])
+    # A frozen executable is already the entry point; do not pass it as a script.
+    arguments = params if getattr(sys, "frozen", False) else f'"{script}" {params}'
     ret = ctypes.windll.shell32.ShellExecuteW(
         None, "runas", sys.executable,
-        f'"{script}" {params}', cwd, 1  # SW_SHOWNORMAL
+        arguments, cwd, 1  # SW_SHOWNORMAL
     )
     # ret > 32 表示成功
     if ret > 32:

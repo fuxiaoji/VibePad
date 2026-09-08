@@ -39,7 +39,7 @@
 
 无需安装 Python，解压即用：
 
-1. 从 [Releases](../../releases) 下载 `VibePad-v1.0.2.zip`
+1. 从 [Releases](../../releases) 下载 `VibePad-v1.0.3.zip`
 2. 解压到任意目录（如 `D:\VibePad`）
 3. 双击 `VibePad.exe`
 
@@ -369,4 +369,12 @@ VibePad/
 ./build_windows.ps1 -Python ./.venv/Scripts/python.exe
 ```
 
-输出为 `dist/VibePad-v1.0.2.zip`。解压后直接运行 `VibePad/VibePad.exe`。
+输出为 `dist/VibePad-v1.0.3.zip`。解压后直接运行 `VibePad/VibePad.exe`。
+
+## v1.0.3 打包修复
+
+修复 Windows 包启动时报 `DLL load failed while importing QtWidgets`：打包时隔离 PATH，避免误收其他软件的同名 ICU DLL。保留 v1.0.2 的后台输入及方向修复。
+
+打包脚本现在必须通过实际 EXE 自检（Qt 界面创建/绘制、SDL 初始化、后台输入设置）后才生成 ZIP。可单独运行 `VibePad.exe --self-test report.json`，检查不需要管理员权限，也不会模拟键鼠输入；正常启动仍按原流程请求管理员权限。
+
+升级请解压到新目录，不要覆盖旧版 `_internal`，避免遗留冲突 DLL。
