@@ -39,7 +39,7 @@
 
 无需安装 Python，解压即用：
 
-1. 从 [Releases](../../releases) 下载 `VibePad-v1.0.0.zip`
+1. 从 [Releases](../../releases) 下载 `VibePad-v1.0.2.zip`
 2. 解压到任意目录（如 `D:\VibePad`）
 3. 双击 `VibePad.exe`
 
@@ -354,3 +354,19 @@ VibePad/
 ## Keywords
 
 `vibecoding` `vibe-coding` `gamepad` `controller` `手柄` `手柄操控电脑` `手柄编程` `gamepad-to-keyboard` `copilot-shortcut` `claude-code` `bilibili` `spatial-navigation` `uiautomation` `win32` `accessibility` `focus-navigation` `screen-keyboard`
+
+## v1.0.2 修复
+
+- 内置 SDL 后台手柄输入支持，修复蓝牙手柄已连接但摇杆/按键无响应的问题，无需额外启动脚本。
+- 修复 SDL GameController 和 pygame Joystick 后端的上下方向反转，鼠标、滚轮和 Vim 导航方向保持一致。
+- 修复仪表盘摇杆圆点的垂直显示方向。
+
+### Windows 打包
+
+在 Windows 的 Python 虚拟环境中安装 `requirements.txt` 和 `pyinstaller`，然后运行：
+
+```powershell
+./build_windows.ps1 -Python ./.venv/Scripts/python.exe
+```
+
+输出为 `dist/VibePad-v1.0.2.zip`。解压后直接运行 `VibePad/VibePad.exe`。

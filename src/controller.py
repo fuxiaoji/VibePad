@@ -14,11 +14,16 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import struct
 import sys
 import threading
 import time
 from typing import Optional
+
+# SDL input must remain active while the hidden pygame window is unfocused.
+# Set before any SDL initialization, including find_controllers().
+os.environ["SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"] = "1"
 
 from src.types import (
     Button, Stick, StickState, TriggerState, ButtonState, GamepadState,
@@ -344,9 +349,9 @@ class _GamepadBackendSDL2:
 
         return {
             "lx": lx,
-            "ly": -ly,
+            "ly": ly,
             "rx": rx,
-            "ry": -ry,
+            "ry": ry,
             "lt": lt,
             "rt": rt,
             "buttons": buttons,
@@ -444,9 +449,9 @@ class _GamepadBackendPygame:
 
         return {
             "lx": lx,
-            "ly": -ly,
+            "ly": ly,
             "rx": rx,
-            "ry": -ry,
+            "ry": ry,
             "lt": lt,
             "rt": rt,
             "buttons": buttons,

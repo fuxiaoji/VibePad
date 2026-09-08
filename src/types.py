@@ -40,6 +40,8 @@ class Stick(Enum):
 
 @dataclass
 class StickState:
+    """Normalized screen coordinates: X positive right, Y positive down."""
+
     x: float = 0.0
     y: float = 0.0
 

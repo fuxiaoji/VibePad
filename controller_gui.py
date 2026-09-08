@@ -208,7 +208,7 @@ class JoystickWidget(QWidget):
         p.drawEllipse(QPointF(cx, cy), radius, radius)
 
         dot_x = cx + self._x * radius
-        dot_y = cy - self._y * radius
+        dot_y = cy + self._y * radius
 
         p.setPen(QPen(BORDER, 1))
         p.drawLine(QPointF(cx - 4, cy), QPointF(cx + 4, cy))
